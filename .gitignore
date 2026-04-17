@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Temporary/intermediate data
+temp_textzoom/
+raw_data/
+
+# Large generated images
+ftsr_verification.jpg
+sample_masks.jpg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights
+*.pth
+*.pt
+*.ckpt
+*.safetensors
