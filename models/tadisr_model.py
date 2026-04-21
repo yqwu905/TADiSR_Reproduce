@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 from .vae_jsd import JointSegmentationDecoders, create_jsd
 
@@ -151,7 +151,7 @@ class _FallbackUNet(nn.Module):
 # ---------------------------------------------------------------------------
 # TACA Custom Attention Processor for diffusers UNet  (Fix M1)
 # ---------------------------------------------------------------------------
-class TACAAttnProcessor:
+class TACAAttnProcessor(nn.Module):
     """
     Custom attention processor that captures cross-attention maps for
     the "text" token, implementing the TACA mechanism for diffusers UNet.
@@ -166,6 +166,7 @@ class TACAAttnProcessor:
     """
 
     def __init__(self, text_token_indices: List[int], layer_id: int):
+        super().__init__()
         self.text_token_indices = text_token_indices
         self.layer_id = layer_id
         # Will be populated during forward pass
@@ -235,7 +236,7 @@ class TACAAttnProcessor:
             # Average across the text token indices, keep per-head
             a_sub = attn_weights[:, :, :, self.text_token_indices]  # [B, H, N, T]
             a_sub = a_sub.mean(dim=-1)  # [B, H, N] — average over text tokens
-            self.a_tex_slice = a_sub.detach()  # Store for later aggregation
+            self.a_tex_slice = a_sub.contiguous()  # Keep gradients for joint training
 
         # Standard attention output
         hidden_states = torch.matmul(attn_weights, value)
@@ -259,7 +260,7 @@ class TACAAttnProcessor:
         return hidden_states
 
 
-class TACAManager:
+class TACAManager(nn.Module):
     """
     Manages TACA attention extraction across all cross-attention layers
     of a diffusers UNet.
@@ -269,11 +270,11 @@ class TACAManager:
     """
 
     def __init__(self, unet, text_token_indices: List[int], latent_channels: int = 4):
+        super().__init__()
         self.text_token_indices = text_token_indices
         self.latent_channels = latent_channels
         self.processors: List[TACAAttnProcessor] = []
         self._num_heads_list: List[int] = []
-        self._original_processors: Dict[str, object] = {}
 
         # Install TACA processors on all cross-attention (attn2) layers
         self._install_processors(unet)
@@ -287,13 +288,11 @@ class TACAManager:
     def _install_processors(self, unet):
         """Replace attn2 (cross-attention) processors with TACAAttnProcessor."""
         attn_procs = {}
+        direct_replacements = []
         layer_id = 0
 
         for name, module in unet.named_modules():
-            # In diffusers UNet, cross-attention modules are named like
-            # "...attn2.processor" and have to_q, to_k, to_v attributes
             if hasattr(module, 'to_q') and hasattr(module, 'to_k'):
-                # Check if this is a cross-attention layer (attn2)
                 if 'attn2' in name:
                     num_heads = getattr(module, 'heads', 8)
                     proc = TACAAttnProcessor(
@@ -303,35 +302,36 @@ class TACAManager:
                     self.processors.append(proc)
                     self._num_heads_list.append(num_heads)
 
-                    # Store with the correct key for set_attn_processor
-                    # The key should be the name up to but not including '.processor'
-                    proc_name = name
-                    if proc_name.endswith('.processor'):
-                        proc_name = proc_name[:-len('.processor')]
+                    # diffusers expects the full "<attention_path>.processor" key.
+                    proc_name = f"{name}.processor"
                     attn_procs[proc_name] = proc
+                    direct_replacements.append((module, proc))
                     layer_id += 1
 
-        # If we found cross-attention layers, install processors
-        if attn_procs:
-            # For diffusers, we need to set processors at the attention module level
-            # Get current processors and replace only attn2 ones
-            try:
-                current_procs = unet.attn_processors
-                for key, proc in attn_procs.items():
-                    if key in current_procs:
-                        current_procs[key] = proc
+        if not attn_procs:
+            return
+
+        installed = 0
+        try:
+            current_procs = dict(unet.attn_processors)
+            for key, proc in attn_procs.items():
+                if key in current_procs:
+                    current_procs[key] = proc
+                    installed += 1
+            if installed:
                 unet.set_attn_processor(current_procs)
-                print(f"[TACA] Replaced {len(attn_procs)} attn2 processors via set_attn_processor")
-            except Exception as e:
-                print(f"[TACA] set_attn_processor failed: {e}")
-                print("[TACA] Falling back to direct module replacement")
-                # Direct replacement fallback
-                for name, module in unet.named_modules():
-                    if 'attn2' in name and hasattr(module, 'set_processor'):
-                        for key, proc in attn_procs.items():
-                            if key in name:
-                                module.set_processor(proc)
-                                break
+        except Exception as e:
+            print(f"[TACA] set_attn_processor failed: {e}")
+            installed = 0
+
+        if installed != len(attn_procs):
+            installed = 0
+            for module, proc in direct_replacements:
+                if hasattr(module, 'set_processor'):
+                    module.set_processor(proc)
+                    installed += 1
+
+        print(f"[TACA] Replaced {installed} attn2 processors")
 
     def aggregate_attention(self, target_shape) -> torch.Tensor:
         """
@@ -352,7 +352,7 @@ class TACAManager:
         device = self.proj_a.weight.device
 
         slices = []
-        for proc in self.processors:
+        for idx, proc in enumerate(self.processors):
             if proc.a_tex_slice is not None:
                 s = proc.a_tex_slice  # [B, heads, N']
                 num_heads = s.shape[1]
@@ -383,7 +383,7 @@ class TACAManager:
                 slices.append(s_flat)
             else:
                 # Fallback: zero slice
-                default_heads = self._num_heads_list[len(slices)] if len(slices) < len(self._num_heads_list) else 8
+                default_heads = self._num_heads_list[idx] if idx < len(self._num_heads_list) else 8
                 slices.append(torch.zeros(B, N, default_heads, device=device))
 
         # Concat → [B, N, M*heads], then project → [B, N, latent_channels]
@@ -461,6 +461,16 @@ class TADiSRWrapper(nn.Module):
         self.register_buffer("alphas", alphas)
         self.register_buffer("alpha_cumprod", alpha_cumprod)
 
+    @staticmethod
+    def _normalize_vae_input(x: torch.Tensor) -> torch.Tensor:
+        """Match diffusers VAE preprocessing: [0, 1] → [-1, 1]."""
+        return x.clamp(0.0, 1.0).mul(2.0).sub(1.0)
+
+    @staticmethod
+    def _denormalize_vae_output(x: torch.Tensor) -> torch.Tensor:
+        """Match diffusers image postprocess: [-1, 1] → [0, 1]."""
+        return x.div(2.0).add(0.5).clamp(0.0, 1.0)
+
     def _try_init_kolors(self, pretrained_path, lora_rank):
         """Initialize with real Kolors backbone + LoRA."""
         # VAE
@@ -518,9 +528,11 @@ class TADiSRWrapper(nn.Module):
             # Collect only attn2 (cross-attention) linear layer names
             cross_attn_modules = []
             for name, module in self.unet_backbone.named_modules():
-                if 'attn2' in name and any(
-                    x in name.split('.')[-1]
-                    for x in ['to_q', 'to_k', 'to_v', 'to_out']
+                if 'attn2' in name and (
+                    name.endswith('to_q')
+                    or name.endswith('to_k')
+                    or name.endswith('to_v')
+                    or name.endswith('to_out.0')
                 ):
                     cross_attn_modules.append(name)
 
@@ -600,7 +612,7 @@ class TADiSRWrapper(nn.Module):
         """Encode image to latent space using VAE encoder."""
         if self.use_real_backbone:
             with torch.no_grad():
-                latent_dist = self.vae.encode(x).latent_dist
+                latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
                 z = latent_dist.mean  # Deterministic encoding
                 z = z * self.vae.config.scaling_factor
             return z
@@ -717,6 +729,8 @@ class TADiSRWrapper(nn.Module):
 
         # 6. JSD: decode to image + segmentation mask
         x_hr_pred, s_mask_pred = self.jsd(z_H, a_tex)
+        if self.use_real_backbone:
+            x_hr_pred = self._denormalize_vae_output(x_hr_pred)
 
         return x_hr_pred, s_mask_pred
 
@@ -733,7 +747,7 @@ class TADiSRWrapper(nn.Module):
             params += [p for p in self.unet_backbone.parameters() if p.requires_grad]
             # TACA W_a projection
             if self.taca_manager is not None:
-                params += list(self.taca_manager.proj_a.parameters())
+                params += list(self.taca_manager.parameters())
         else:
             params += list(self.unet_fb.parameters())
             params += list(self.vae_encoder_fb.parameters())

@@ -388,9 +388,11 @@ class JointSegmentationDecoders(nn.Module):
     """
     def __init__(self, block_out_channels=(128, 256, 512, 512),
                  layers_per_block=2, latent_channels=4,
-                 lora_rank=16, norm_num_groups=32):
+                 lora_rank=16, norm_num_groups=32,
+                 latent_scaling_factor: float = 1.0):
         super().__init__()
         self.lora_rank = lora_rank
+        self.latent_scaling_factor = float(latent_scaling_factor)
 
         # Image decoder: output 3 channels (RGB image)
         self.img_decoder = DecoderBranch(
@@ -531,8 +533,12 @@ class JointSegmentationDecoders(nn.Module):
             x_hr:   Reconstructed HR image [B, 3, H, W]
             s_mask: Text segmentation mask [B, 1, H, W] (sigmoid-activated)
         """
+        img_latent = z_H
+        if self.latent_scaling_factor != 1.0:
+            img_latent = z_H / self.latent_scaling_factor
+
         # --- conv_in ---
-        h_img = self.img_decoder.conv_in(z_H)
+        h_img = self.img_decoder.conv_in(img_latent)
         h_seg = self.seg_decoder.conv_in(a_tex)
 
         # --- mid_block ---
@@ -589,6 +595,7 @@ def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
         lpb = layers_per_block if layers_per_block is not None else cfg.get("layers_per_block", 2)
         lch = cfg.get("latent_channels", latent_channels)
         nng = cfg.get("norm_num_groups", 32)
+        latent_scaling_factor = cfg.get("scaling_factor", 1.0)
     else:
         if lightweight:
             boc = block_out_channels or [32, 64, 128, 128]
@@ -598,6 +605,7 @@ def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
             lpb = layers_per_block if layers_per_block is not None else 2
         lch = latent_channels
         nng = 32
+        latent_scaling_factor = 1.0
 
     # Ensure GroupNorm groups doesn't exceed smallest channel count
     nng = min(nng, min(boc))
@@ -608,6 +616,7 @@ def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
         latent_channels=lch,
         lora_rank=lora_rank,
         norm_num_groups=nng,
+        latent_scaling_factor=latent_scaling_factor,
     )
 
     if vae is not None:

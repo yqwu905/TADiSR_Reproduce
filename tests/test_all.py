@@ -600,6 +600,90 @@ def test_taca_attn_processor():
     print()
 
 
+def test_diffusers_taca_integration():
+    """Verify TACA installs correctly on a real diffusers UNet."""
+    print("=" * 60)
+    print("TEST: Diffusers TACA Integration")
+    print("=" * 60)
+
+    try:
+        from diffusers import UNet2DConditionModel
+    except ImportError:
+        print("  ! diffusers not installed, skipping integration test")
+        print()
+        return
+
+    from models.tadisr_model import TACAAttnProcessor, TACAManager
+
+    unet = UNet2DConditionModel(
+        sample_size=32,
+        in_channels=4,
+        out_channels=4,
+        down_block_types=("CrossAttnDownBlock2D", "DownBlock2D"),
+        up_block_types=("UpBlock2D", "CrossAttnUpBlock2D"),
+        block_out_channels=(32, 64),
+        layers_per_block=1,
+        cross_attention_dim=16,
+        norm_num_groups=8,
+        attention_head_dim=8,
+    )
+    manager = TACAManager(unet, text_token_indices=[1], latent_channels=4)
+
+    attn2_keys = [k for k in unet.attn_processors if "attn2.processor" in k]
+    assert len(attn2_keys) > 0, "Expected at least one cross-attention processor"
+    assert all(isinstance(unet.attn_processors[k], TACAAttnProcessor) for k in attn2_keys), \
+        "attn2 processors should be replaced with TACAAttnProcessor"
+
+    x = torch.randn(1, 4, 32, 32)
+    t = torch.tensor([10], dtype=torch.long)
+    context = torch.randn(1, 5, 16)
+    _ = unet(x, t, encoder_hidden_states=context).sample
+
+    assert any(proc.a_tex_slice is not None for proc in manager.processors), \
+        "At least one TACA processor should capture attention slices"
+
+    a_tex = manager.aggregate_attention(x.shape)
+    spatial_var = a_tex.view(1, 4, -1).var(dim=-1)
+    assert torch.any(spatial_var > 0), "Aggregated a_tex should vary spatially"
+
+    state_keys = set(manager.state_dict().keys())
+    assert "proj_a.weight" in state_keys and "proj_a.bias" in state_keys, \
+        "TACA projection should be part of manager state_dict"
+
+    print(f"  ✓ Replaced {len(attn2_keys)} attn2 processors in diffusers UNet")
+    print(f"  ✓ Cross-attention slices captured during forward")
+    print(f"  ✓ a_tex has spatial variation (not collapsed to a constant map)")
+    print(f"  ✓ proj_a is registered in state_dict")
+    print()
+
+
+def test_vae_normalization_helpers():
+    """Verify VAE input/output scaling helpers match diffusers conventions."""
+    print("=" * 60)
+    print("TEST: VAE Normalization Helpers")
+    print("=" * 60)
+
+    from models.tadisr_model import TADiSRWrapper
+
+    x = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float32).view(1, 1, 1, 3)
+    x_norm = TADiSRWrapper._normalize_vae_input(x)
+    expected_norm = torch.tensor([-1.0, 0.0, 1.0], dtype=torch.float32).view(1, 1, 1, 3)
+    assert torch.allclose(x_norm, expected_norm), "VAE input should map [0,1] to [-1,1]"
+
+    x_roundtrip = TADiSRWrapper._denormalize_vae_output(x_norm)
+    assert torch.allclose(x_roundtrip, x), "VAE output helper should invert normalization"
+
+    x_out = torch.tensor([-2.0, 0.0, 2.0], dtype=torch.float32).view(1, 1, 1, 3)
+    x_denorm = TADiSRWrapper._denormalize_vae_output(x_out)
+    expected_denorm = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float32).view(1, 1, 1, 3)
+    assert torch.allclose(x_denorm, expected_denorm), "Output helper should clamp to [0,1]"
+
+    print(f"  ✓ [0,1] → [-1,1] normalization matches diffusers VAE preprocessing")
+    print(f"  ✓ [-1,1] → [0,1] denormalization is invertible on-range")
+    print(f"  ✓ Out-of-range decoder outputs are clamped back to [0,1]")
+    print()
+
+
 def run_all_tests():
     """Run all tests."""
     print("\n" + "=" * 60)
@@ -614,6 +698,8 @@ def run_all_tests():
         ("Loss Functions", test_losses),
         ("LR Upsample (Fix M4)", test_lr_upsample),
         ("TACA AttnProcessor (Fix M1)", test_taca_attn_processor),
+        ("Diffusers TACA Integration", test_diffusers_taca_integration),
+        ("VAE Normalization Helpers", test_vae_normalization_helpers),
         ("Full Model Forward", test_full_model_forward),
         ("Training Loop", test_training_loop),
         ("Checkpoint Save (Fix T2)", test_checkpoint_save),

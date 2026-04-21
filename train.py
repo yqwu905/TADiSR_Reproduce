@@ -96,7 +96,6 @@ def train(args):
     model = TADiSRWrapper(
         use_kolors=args.use_kolors,
         context_dim=args.context_dim,
-        base_jsd_dim=args.jsd_dim,
         lora_rank=args.lora_rank,
     ).to(device)
 
@@ -212,7 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--context_dim", type=int, default=4096,
                         help="Text encoder context dimension (4096 for Kolors/ChatGLM)")
     parser.add_argument("--jsd_dim", type=int, default=128,
-                        help="JSD base dimension")
+                        help="Legacy compatibility flag; currently unused")
     parser.add_argument("--lora_rank", type=int, default=16,
                         help="LoRA rank for UNet cross-attention fine-tuning")
 
