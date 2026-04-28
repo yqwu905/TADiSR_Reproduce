@@ -24,6 +24,58 @@ from losses.composite_loss import CompositeTADiSRLoss
 from data.dataset import TADiSRDataset, tadisr_collate_fn
 
 
+def _is_torch_npu_available():
+    """Best-effort check for torch_npu runtime availability."""
+    try:
+        import torch_npu  # noqa: F401
+    except Exception:
+        pass
+    if not hasattr(torch, "npu"):
+        return False
+    is_available = getattr(torch.npu, "is_available", None)
+    if callable(is_available):
+        return bool(is_available())
+    return False
+
+
+def _resolve_device(args_device, local_rank=0):
+    """Resolve runtime device from args + current environment."""
+    req = (args_device or "cpu").lower()
+
+    if req == "npu":
+        if _is_torch_npu_available():
+            if hasattr(torch.npu, "set_device"):
+                torch.npu.set_device(local_rank)
+            return torch.device("npu", local_rank)
+        print("[Device] Requested NPU but torch_npu is unavailable, fallback to CPU.")
+        return torch.device("cpu")
+
+    if req == "cuda":
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+            return torch.device("cuda", local_rank)
+        print("[Device] Requested CUDA but CUDA is unavailable, fallback to CPU.")
+        return torch.device("cpu")
+
+    if req == "cpu":
+        return torch.device("cpu")
+
+    # Keep backward compatibility for users who pass any torch-recognized device.
+    try:
+        return torch.device(args_device)
+    except Exception:
+        print(f"[Device] Unknown device '{args_device}', fallback to CPU.")
+        return torch.device("cpu")
+
+
+def _resolve_dist_backend(device):
+    if device.type == "cuda":
+        return "nccl"
+    if device.type == "npu":
+        return "hccl"
+    return "gloo"
+
+
 def create_datasets(args):
     """Create training datasets: FTSR + optionally Real-CE."""
     datasets = []
@@ -88,21 +140,17 @@ def setup_distributed(args):
             "rank": 0,
             "local_rank": 0,
             "world_size": 1,
-            "device": torch.device(args.device),
+            "device": _resolve_device(args.device, local_rank=0),
         }
 
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    device = _resolve_device(args.device, local_rank=local_rank)
+
     if not dist.is_initialized():
-        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        backend = _resolve_dist_backend(device)
         dist.init_process_group(backend=backend, init_method="env://")
 
     rank = dist.get_rank()
-    local_rank = int(os.environ.get("LOCAL_RANK", rank))
-
-    if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
-        device = torch.device("cuda", local_rank)
-    else:
-        device = torch.device("cpu")
 
     return {
         "distributed": True,
@@ -173,8 +221,8 @@ def train(args):
     if ddp_state["distributed"]:
         model = DDP(
             model,
-            device_ids=[ddp_state["local_rank"]] if device.type == "cuda" else None,
-            output_device=ddp_state["local_rank"] if device.type == "cuda" else None,
+            device_ids=[ddp_state["local_rank"]] if device.type in {"cuda", "npu"} else None,
+            output_device=ddp_state["local_rank"] if device.type in {"cuda", "npu"} else None,
             find_unused_parameters=False,
         )
     raw_model = model.module if ddp_state["distributed"] else model
