@@ -25,6 +25,7 @@ numpy>=1.24.0
 # Data pipeline
 tqdm>=4.65.0
 requests>=2.31.0
+PyYAML>=6.0.1
 
 # Degradation pipeline (Real-ESRGAN style)
 scipy>=1.11.0

@@ -11,7 +11,9 @@ Paper reference (Section 4.1):
   - Total loss: ℓ_tot = ℓ_img + ℓ_seg (NO separate noise prediction loss)
 """
 import os
+import yaml
 import argparse
+from types import SimpleNamespace
 import torch
 import torch.optim as optim
 import torch.distributed as dist
@@ -23,6 +25,30 @@ from models.tadisr_model import TADiSRWrapper
 from losses.composite_loss import CompositeTADiSRLoss
 from data.dataset import TADiSRDataset, tadisr_collate_fn
 
+
+
+def load_config(config_path):
+    """Load training config from a YAML file and return namespace args."""
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Invalid config format in {config_path}: expected YAML mapping")
+
+    required_keys = {
+        "ftsr_dir", "realce_dir",
+        "use_kolors", "context_dim", "jsd_dim", "lora_rank",
+        "device", "batch_size", "lr", "grad_clip", "warmup_iters", "max_iters", "epochs",
+        "log_every", "save_every", "ckpt_dir",
+    }
+    missing = required_keys.difference(cfg.keys())
+    if missing:
+        missing_txt = ", ".join(sorted(missing))
+        raise ValueError(f"Missing config keys: {missing_txt}")
+
+    return SimpleNamespace(**cfg)
 
 def _is_torch_npu_available():
     """Best-effort check for torch_npu runtime availability."""
@@ -324,42 +350,13 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TADiSR Training")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/train/default.yaml",
+        help="Path to training config YAML file",
+    )
 
-    # Data
-    parser.add_argument("--ftsr_dir", type=str, default="dataset/FTSR",
-                        help="Path to FTSR dataset")
-    parser.add_argument("--realce_dir", type=str, default="dataset/Real-CE",
-                        help="Path to Real-CE dataset")
-
-    # Model
-    parser.add_argument("--use_kolors", action="store_true",
-                        help="Use real Kolors backbone (requires GPU + downloads)")
-    parser.add_argument("--context_dim", type=int, default=4096,
-                        help="Text encoder context dimension (4096 for Kolors/ChatGLM)")
-    parser.add_argument("--jsd_dim", type=int, default=128,
-                        help="Legacy compatibility flag; currently unused")
-    parser.add_argument("--lora_rank", type=int, default=16,
-                        help="LoRA rank for UNet cross-attention fine-tuning")
-
-    # Training
-    parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--batch_size", type=int, default=1,
-                        help="Batch size per GPU (paper: 1)")
-    parser.add_argument("--lr", type=float, default=5e-5,
-                        help="Learning rate (paper: 5e-5)")
-    parser.add_argument("--grad_clip", type=float, default=1.0,
-                        help="Gradient clipping max norm")
-    parser.add_argument("--warmup_iters", type=int, default=0,
-                        help="Learning rate warmup iterations (paper: 0, fixed LR)")
-    parser.add_argument("--max_iters", type=int, default=200000,
-                        help="Max training iterations (paper: 200k)")
-    parser.add_argument("--epochs", type=int, default=9999,
-                        help="Max epochs (controlled by max_iters)")
-
-    # Logging / Checkpointing
-    parser.add_argument("--log_every", type=int, default=10)
-    parser.add_argument("--save_every", type=int, default=5000)
-    parser.add_argument("--ckpt_dir", type=str, default="checkpoints")
-
-    args = parser.parse_args()
+    cli_args = parser.parse_args()
+    args = load_config(cli_args.config)
     train(args)
