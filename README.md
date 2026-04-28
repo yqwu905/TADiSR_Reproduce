@@ -439,37 +439,38 @@ dataset/FTSR/
 | LoRA rank | 16 | 仅 cross-attention (attn2) |
 | 超分辨率倍率 | 4× | |
 
-### 6.2 完整 Kolors 训练（GPU）
+训练参数统一放在 `YAML` 配置文件中（默认：`configs/train/default.yaml`），通过 `--config` 指定。
+
+示例：
 
 ```bash
-# 单 GPU 训练
-python train.py \
-  --use_kolors \
-  --ftsr_dir dataset/FTSR \
-  --realce_dir dataset/Real-CE \
-  --device cuda \
-  --batch_size 1 \
-  --lr 5e-5 \
-  --max_iters 200000 \
-  --lora_rank 16 \
-  --context_dim 4096 \
-  --jsd_dim 128 \
-  --grad_clip 1.0 \
-  --log_every 100 \
-  --save_every 5000 \
-  --ckpt_dir checkpoints
+python train.py --config configs/train/default.yaml
 ```
 
-**如果已本地下载 Kolors 权重**，指定路径：
+### 6.2 完整 Kolors 训练（GPU）
+
+先复制默认配置并修改为 GPU/Kolors 参数：
 
 ```bash
-python train.py \
-  --use_kolors \
-  --ftsr_dir dataset/FTSR \
-  --device cuda \
-  --batch_size 1 \
-  --lr 5e-5 \
-  --max_iters 200000
+cp configs/train/default.yaml configs/train/kolors_gpu.yaml
+```
+
+将 `configs/train/kolors_gpu.yaml` 中至少以下字段改为：
+
+```yaml
+use_kolors: true
+device: cuda
+batch_size: 1
+lr: 5e-5
+max_iters: 200000
+log_every: 100
+save_every: 5000
+```
+
+启动训练：
+
+```bash
+python train.py --config configs/train/kolors_gpu.yaml
 ```
 
 > 代码中 `pretrained_path` 默认为 `"Kwai-Kolors/Kolors-diffusers"`，会自动从 HuggingFace 下载。如需修改，可在 `models/tadisr_model.py` 中调整 `TADiSRWrapper.__init__` 的 `pretrained_path` 参数。
@@ -479,13 +480,9 @@ python train.py \
 不加载 Kolors 骨干，使用轻量级替代组件：
 
 ```bash
-python train.py \
-  --ftsr_dir dataset/FTSR \
-  --device cpu \
-  --batch_size 2 \
-  --max_iters 100 \
-  --log_every 10 \
-  --save_every 50
+cp configs/train/default.yaml configs/train/cpu_debug.yaml
+# 按需修改 cpu_debug.yaml，例如 batch_size/max_iters/save_every
+python train.py --config configs/train/cpu_debug.yaml
 ```
 
 此模式下：
@@ -496,17 +493,10 @@ python train.py \
 
 ### 6.4 多 GPU 分布式训练
 
-使用 PyTorch `torchrun` 进行分布式训练（需自行包装 DDP）：
+使用 PyTorch `torchrun` 进行分布式训练：
 
 ```bash
-# 参考方式（需修改 train.py 添加 DDP 支持）
-torchrun --nproc_per_node=4 train.py \
-  --use_kolors \
-  --ftsr_dir dataset/FTSR \
-  --device cuda \
-  --batch_size 1 \
-  --lr 5e-5 \
-  --max_iters 200000
+torchrun --nproc_per_node=4 train.py --config configs/train/kolors_gpu.yaml
 ```
 
 ### 6.5 训练流程详解
