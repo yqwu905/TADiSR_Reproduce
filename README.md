@@ -475,6 +475,31 @@ python train.py --config configs/train/kolors_gpu.yaml
 
 > 代码中 `pretrained_path` 默认为 `"Kwai-Kolors/Kolors-diffusers"`，会自动从 HuggingFace 下载。如需修改，可在 `models/tadisr_model.py` 中调整 `TADiSRWrapper.__init__` 的 `pretrained_path` 参数。
 
+#### 6.2.1 离线 Prompt Embedding（不加载 ChatGLM）
+
+如果你使用固定提示词（默认 `"A high-quality photo with clear text"`），可以提前离线编码并在训练时直接加载，避免训练阶段加载 `text_encoder/`。
+
+1) 先离线导出 embedding：
+
+```bash
+python scripts/precompute_prompt_embedding.py \
+  --pretrained_path Kwai-Kolors/Kolors-diffusers \
+  --prompt "A high-quality photo with clear text" \
+  --output assets/fixed_prompt_context.pt
+```
+
+2) 在训练配置（如 `configs/train/kolors_gpu.yaml`）添加：
+
+```yaml
+precomputed_text_context_path: assets/fixed_prompt_context.pt
+```
+
+此时模型会读取离线文件中的：
+- `context`：形状 `[1, S, C]`（或 `[S, C]`）
+- `text_token_indices`：`"text"` token 的位置列表
+
+并跳过 ChatGLM 在线编码。
+
 ### 6.3 CPU 调试模式
 
 不加载 Kolors 骨干，使用轻量级替代组件：
