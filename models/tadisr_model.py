@@ -525,6 +525,27 @@ class TADiSRWrapper(nn.Module):
         self.use_real_backbone = True
         print(f"[TADiSR] ✓ Kolors backbone initialized with LoRA rank={lora_rank}")
 
+
+    def _normalize_single_prompt_context(self, context: torch.Tensor, source: str) -> torch.Tensor:
+        """Normalize context tensor to shape [1, S, C] for a fixed prompt."""
+        if context.ndim == 2:
+            context = context.unsqueeze(0)
+
+        if context.ndim != 3:
+            raise ValueError(
+                f"{source}: expected 2D/3D tensor, got shape {tuple(context.shape)}"
+            )
+
+        # Some ChatGLM variants return [S, B, C]. For a fixed prompt we expect B=1.
+        if context.shape[1] == 1 and context.shape[0] != 1:
+            context = context.transpose(0, 1).contiguous()
+
+        if context.shape[0] != 1:
+            raise ValueError(
+                f"{source}: expected fixed-prompt batch dim=1, got shape {tuple(context.shape)}"
+            )
+        return context
+
     def _load_precomputed_text_context(self, path: str) -> bool:
         """Load precomputed fixed-prompt context from disk.
 
@@ -548,13 +569,8 @@ class TADiSRWrapper(nn.Module):
 
             if not isinstance(context, torch.Tensor):
                 raise ValueError("missing tensor 'context'")
-            if context.ndim == 2:
-                context = context.unsqueeze(0)
-            if context.ndim != 3:
-                raise ValueError(f"expected [S,C] or [1,S,C], got shape {tuple(context.shape)}")
-            if context.shape[0] != 1:
-                raise ValueError("first dimension must be 1 for fixed prompt context")
 
+            context = self._normalize_single_prompt_context(context, source="precomputed context")
             self.precomputed_text_context = context.float()
             self.context_dim = int(context.shape[-1])
 
@@ -694,9 +710,11 @@ class TADiSRWrapper(nn.Module):
                         truncation=True,
                     ).to(device)
                     outputs = self.text_encoder(**inputs)
-                    # ChatGLM returns last_hidden_state
-                    context = outputs.last_hidden_state
-                    # Expand to batch size
+                    # ChatGLM variants may output [S, B, C] or [B, S, C].
+                    context = self._normalize_single_prompt_context(
+                        outputs.last_hidden_state, source="text encoder output"
+                    )
+                    # Expand fixed-prompt context to current batch size
                     context = context.expand(batch_size, -1, -1)
             return context
         else:
