@@ -82,14 +82,23 @@ def _try_load_kolors_text_encoder(
 ):
     """Load ChatGLM text encoder used by Kolors."""
     try:
-        from transformers import AutoTokenizer, AutoModel
+        from transformers import AutoTokenizer, AutoModel, AutoConfig
         tokenizer = AutoTokenizer.from_pretrained(
-            pretrained_path, subfolder="text_encoder", trust_remote_code=True
+            f'{pretrained_path}/text_encoder', trust_remote_code=True
         )
+        config = AutoConfig.from_pretrained(
+            f'{pretrained_path}/text_encoder',
+            trust_remote_code=True,
+            local_files_only=True,
+        )
+        config.auto_map["AutoModel"] = "modeling_chatglm.ChatGLMModel"
         text_encoder = AutoModel.from_pretrained(
-            pretrained_path, subfolder="text_encoder", trust_remote_code=True,
-            torch_dtype=torch_dtype,
-        )
+            f'{pretrained_path}/text_encoder',
+            config=config,
+            trust_remote_code=True,
+            local_files_only=True,
+            torch_dtype=torch.float16,
+        ).half().eval()
         text_encoder.requires_grad_(False)
         text_encoder.eval()
         print(f"[TADiSR] ✓ Loaded ChatGLM text encoder from {pretrained_path}")
@@ -549,7 +558,7 @@ class TADiSRWrapper(nn.Module):
     FIXED_PROMPT = "A high-quality photo with clear text"
     SR_SCALE = 4  # 4× super-resolution
 
-    def __init__(self, pretrained_path: str = "Kwai-Kolors/Kolors-diffusers",
+    def __init__(self, pretrained_path: str = "/home/models/Kolors/",
                  use_kolors: bool = True, latent_channels: int = 4,
                  context_dim: int = 4096, lora_rank: int = 16,
                  precomputed_text_context_path: Optional[str] = None,

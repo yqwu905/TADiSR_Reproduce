@@ -1,12 +1,8 @@
 # Core deep learning
-torch>=2.1.0
+torch==2.9.0
 torchvision>=0.16.0
 
 # Diffusion model backbone (Kolors)
-diffusers>=0.25.0
-transformers>=4.36.0
-accelerate>=0.25.0
-safetensors>=0.4.0
 
 # LoRA fine-tuning
 peft>=0.7.0
@@ -16,8 +12,6 @@ lpips>=0.1.4
 
 # Image processing
 opencv-python>=4.8.0
-Pillow>=10.0.0
-numpy>=1.24.0
 
 # OCR filtering
 # TrOCR is loaded via transformers (included above)
@@ -29,3 +23,15 @@ PyYAML>=6.0.1
 
 # Degradation pipeline (Real-ESRGAN style)
 scipy>=1.11.0
+pydantic==2.8.2
+accelerate==0.27.2
+huggingface-hub==0.23.4
+imageio==2.25.1
+numpy==1.21.6
+omegaconf==2.3.0
+pandas==1.3.5
+Pillow==9.4.0
+transformers==4.42.4
+diffusers==0.28.2
+sentencepiece==0.1.99
+gradio==4.37.2

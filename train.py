@@ -46,6 +46,7 @@ class _NullSummaryWriter:
     def close(self):
         return None
 
+torch.jit._state.disable()
 
 def load_config(config_path):
     """Load training config from a YAML file and return namespace args."""
