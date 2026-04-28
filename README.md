@@ -725,7 +725,24 @@ for k, v in sample.items():
 | JSD 通道 | [32, 64, 128, 128] | [128, 256, 512, 512] |
 | 参数量 | ~2M | ~18GB |
 
-### Q6: 如何恢复训练？
+### Q6: 如何适配昇腾 `torch_npu` 训练？
+
+先安装昇腾 PyTorch 运行时（`torch_npu`），然后启动时将设备设置为 `npu`：
+
+```bash
+# 单卡
+python train.py --use_kolors --ftsr_dir dataset/FTSR --device npu
+
+# 多卡（示例：8 卡）
+torchrun --nproc_per_node=8 train.py --use_kolors --ftsr_dir dataset/FTSR --device npu
+```
+
+当前 `train.py` 会自动：
+- 检测 `torch_npu` 是否可用；
+- 在分布式场景使用 `HCCL` 后端；
+- 若未检测到 NPU 运行时，则自动回退到 CPU 并打印提示。
+
+### Q7: 如何恢复训练？
 
 当前版本需手动加载 checkpoint：
 
