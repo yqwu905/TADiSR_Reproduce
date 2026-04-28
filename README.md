@@ -460,6 +460,7 @@ cp configs/train/default.yaml configs/train/kolors_gpu.yaml
 ```yaml
 use_kolors: true
 device: cuda
+dist_strategy: ddp
 batch_size: 1
 lr: 5e-5
 max_iters: 200000
@@ -523,6 +524,15 @@ python train.py --config configs/train/cpu_debug.yaml
 ```bash
 torchrun --nproc_per_node=4 train.py --config configs/train/kolors_gpu.yaml
 ```
+
+可通过配置项 `dist_strategy` 切换并行策略：
+
+```yaml
+dist_strategy: ddp   # 默认
+# dist_strategy: fsdp
+```
+
+> `fsdp` 需要加速器设备（`device: cuda` 或 `device: npu`）；NPU 场景依赖 `torch_npu`/环境对 FSDP 的支持。
 
 ### 6.5 训练流程详解
 

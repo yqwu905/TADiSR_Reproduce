@@ -18,6 +18,7 @@ import torch
 import torch.optim as optim
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
@@ -51,6 +52,8 @@ def load_config(config_path):
 
     # Optional: offline fixed-prompt embedding path to skip loading ChatGLM.
     cfg.setdefault("precomputed_text_context_path", None)
+    # Distributed strategy: ddp | fsdp (used when WORLD_SIZE > 1)
+    cfg.setdefault("dist_strategy", "ddp")
 
     return SimpleNamespace(**cfg)
 
@@ -104,6 +107,25 @@ def _resolve_dist_backend(device):
     if device.type == "npu":
         return "hccl"
     return "gloo"
+
+
+def _resolve_fsdp_device_id(ddp_state):
+    """Return FSDP device_id for current process, or None if unsupported."""
+    device = ddp_state["device"]
+    local_rank = ddp_state["local_rank"]
+
+    if device.type == "cuda":
+        return torch.cuda.current_device()
+
+    if device.type == "npu":
+        # torch_npu exposes current_device() in most environments; fallback to local_rank.
+        current_device = getattr(torch.npu, "current_device", None)
+        if callable(current_device):
+            return current_device()
+        return local_rank
+
+    # CPU/gloo FSDP is not targeted in this project training path.
+    return None
 
 
 def create_datasets(args):
@@ -200,6 +222,9 @@ def train(args):
     ddp_state = setup_distributed(args)
     is_main = ddp_state["rank"] == 0
     device = ddp_state["device"]
+    dist_strategy = str(getattr(args, "dist_strategy", "ddp")).lower()
+    if dist_strategy not in {"ddp", "fsdp"}:
+        raise ValueError(f"Unsupported dist_strategy: {dist_strategy}. Use 'ddp' or 'fsdp'.")
 
     if is_main:
         print(f"Starting TADiSR training on {device}...")
@@ -207,7 +232,7 @@ def train(args):
         print(f"  Max iterations: {args.max_iters}")
         print(f"  Gradient clip: {args.grad_clip}")
         if ddp_state["distributed"]:
-            print(f"  DDP enabled — world_size: {ddp_state['world_size']}")
+            print(f"  Distributed enabled ({dist_strategy.upper()}) — world_size: {ddp_state['world_size']}")
 
     tb_log_dir = getattr(args, "tensorboard_log_dir", os.path.join(args.ckpt_dir, "tensorboard"))
     tb_writer = SummaryWriter(log_dir=tb_log_dir) if is_main else None
@@ -255,15 +280,28 @@ def train(args):
         print(f"  Trainable params: {train_params:,} ({100*train_params/total_params:.2f}%)")
 
     if ddp_state["distributed"]:
-        model = DDP(
-            model,
-            device_ids=[ddp_state["local_rank"]] if device.type in {"cuda", "npu"} else None,
-            output_device=ddp_state["local_rank"] if device.type in {"cuda", "npu"} else None,
-            find_unused_parameters=False,
-        )
+        if dist_strategy == "ddp":
+            model = DDP(
+                model,
+                device_ids=[ddp_state["local_rank"]] if device.type in {"cuda", "npu"} else None,
+                output_device=ddp_state["local_rank"] if device.type in {"cuda", "npu"} else None,
+                find_unused_parameters=False,
+            )
+        else:
+            fsdp_device_id = _resolve_fsdp_device_id(ddp_state)
+            if fsdp_device_id is None:
+                raise RuntimeError(
+                    "FSDP requires accelerator device in this project "
+                    f"(cuda/npu), got device={device.type}."
+                )
+            model = FSDP(
+                model,
+                device_id=fsdp_device_id,
+                use_orig_params=True,
+            )
     raw_model = model.module if ddp_state["distributed"] else model
 
-    optimizer = optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
+    optimizer = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.01)
 
     # 4. Learning rate scheduler (optional warmup + cosine)
     if args.warmup_iters > 0:
@@ -299,7 +337,7 @@ def train(args):
             optimizer.zero_grad()
 
             # Forward — Paper loss: ℓ_tot = ℓ_img + ℓ_seg (NO noise loss)
-            x_pred, s_pred = raw_model.forward_train(
+            x_pred, s_pred = model.forward_train(
                 lr_img, context, text_indices
             )
 
