@@ -14,3 +14,4 @@ epochs: 9999
 log_every: 10
 save_every: 5000
 ckpt_dir: checkpoints
+tensorboard_log_dir: checkpoints/tensorboard

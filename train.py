@@ -20,6 +20,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
 
 from models.tadisr_model import TADiSRWrapper
 from losses.composite_loss import CompositeTADiSRLoss
@@ -205,6 +206,11 @@ def train(args):
         if ddp_state["distributed"]:
             print(f"  DDP enabled — world_size: {ddp_state['world_size']}")
 
+    tb_log_dir = getattr(args, "tensorboard_log_dir", os.path.join(args.ckpt_dir, "tensorboard"))
+    tb_writer = SummaryWriter(log_dir=tb_log_dir) if is_main else None
+    if is_main:
+        print(f"  TensorBoard log dir: {tb_log_dir}")
+
     # 1. Dataset
     dataset = create_datasets(args)
     sampler = None
@@ -309,6 +315,10 @@ def train(args):
 
             if is_main and global_step % args.log_every == 0:
                 current_lr = optimizer.param_groups[0]['lr']
+                tb_writer.add_scalar("train/loss", loss.item(), global_step)
+                tb_writer.add_scalar("train/loss_img", loss_img.item(), global_step)
+                tb_writer.add_scalar("train/loss_seg", loss_seg.item(), global_step)
+                tb_writer.add_scalar("train/lr", current_lr, global_step)
                 print(
                     f"[Step {global_step:6d}] "
                     f"Loss: {loss.item():.4f} "
@@ -344,6 +354,7 @@ def train(args):
             break
 
     if is_main:
+        tb_writer.close()
         print(f"\nTraining complete! {global_step} iterations.")
     cleanup_distributed(ddp_state)
 
