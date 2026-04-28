@@ -6,6 +6,7 @@ jsd_dim: 128
 lora_rank: 16
 precomputed_text_context_path: null  # e.g. assets/fixed_prompt_context.pt
 device: cpu
+dist_strategy: ddp  # ddp | fsdp
 batch_size: 1
 lr: 5e-5
 grad_clip: 1.0
