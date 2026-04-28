@@ -4,6 +4,7 @@ use_kolors: false
 context_dim: 4096
 jsd_dim: 128
 lora_rank: 16
+precomputed_text_context_path: null  # e.g. assets/fixed_prompt_context.pt
 device: cpu
 batch_size: 1
 lr: 5e-5

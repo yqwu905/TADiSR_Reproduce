@@ -49,6 +49,9 @@ def load_config(config_path):
         missing_txt = ", ".join(sorted(missing))
         raise ValueError(f"Missing config keys: {missing_txt}")
 
+    # Optional: offline fixed-prompt embedding path to skip loading ChatGLM.
+    cfg.setdefault("precomputed_text_context_path", None)
+
     return SimpleNamespace(**cfg)
 
 def _is_torch_npu_available():
@@ -240,6 +243,7 @@ def train(args):
         use_kolors=args.use_kolors,
         context_dim=args.context_dim,
         lora_rank=args.lora_rank,
+        precomputed_text_context_path=getattr(args, "precomputed_text_context_path", None),
     ).to(device)
 
     # 3. Optimizer — only trainable parameters (LoRA + JSD)

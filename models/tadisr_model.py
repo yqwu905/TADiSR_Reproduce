@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import os
 from typing import Optional, List
 
 from .vae_jsd import JointSegmentationDecoders, create_jsd
@@ -425,11 +426,15 @@ class TADiSRWrapper(nn.Module):
 
     def __init__(self, pretrained_path: str = "Kwai-Kolors/Kolors-diffusers",
                  use_kolors: bool = True, latent_channels: int = 4,
-                 context_dim: int = 4096, lora_rank: int = 16):
+                 context_dim: int = 4096, lora_rank: int = 16,
+                 precomputed_text_context_path: Optional[str] = None):
         super().__init__()
         self.latent_channels = latent_channels
         self.context_dim = context_dim
         self.use_real_backbone = False
+        self.precomputed_text_context = None
+        self.precomputed_text_indices = None
+        self.precomputed_text_context_path = precomputed_text_context_path
 
         # --- Try loading real Kolors backbone ---
         self.vae = None
@@ -485,15 +490,23 @@ class TADiSRWrapper(nn.Module):
             self.vae = None
             return
 
-        # Text encoder
-        self.tokenizer, self.text_encoder = _try_load_kolors_text_encoder(pretrained_path)
-        if self.tokenizer is None:
-            self.vae = None
-            self.unet_backbone = None
-            return
-
-        # Tokenize fixed prompt and find "text" token index
-        self._text_token_indices = self._find_text_token_indices()
+        # Text encoder or offline precomputed prompt embedding
+        if self.precomputed_text_context_path:
+            ok = self._load_precomputed_text_context(self.precomputed_text_context_path)
+            if not ok:
+                self.vae = None
+                self.unet_backbone = None
+                return
+            self._text_token_indices = self.precomputed_text_indices
+            print("[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.")
+        else:
+            self.tokenizer, self.text_encoder = _try_load_kolors_text_encoder(pretrained_path)
+            if self.tokenizer is None:
+                self.vae = None
+                self.unet_backbone = None
+                return
+            # Tokenize fixed prompt and find "text" token index
+            self._text_token_indices = self._find_text_token_indices()
 
         # Fix M1: Install TACA attention processors BEFORE LoRA
         # (so LoRA wraps the already-installed TACA processors)
@@ -511,6 +524,53 @@ class TADiSRWrapper(nn.Module):
 
         self.use_real_backbone = True
         print(f"[TADiSR] ✓ Kolors backbone initialized with LoRA rank={lora_rank}")
+
+    def _load_precomputed_text_context(self, path: str) -> bool:
+        """Load precomputed fixed-prompt context from disk.
+
+        Supported file formats:
+          1) Tensor file containing [S, C] or [1, S, C]
+          2) Dict with keys:
+             - "context": Tensor [S, C] or [1, S, C]
+             - optional "text_token_indices": list[int]
+        """
+        if not os.path.isfile(path):
+            print(f"[TADiSR] ✗ Precomputed context file not found: {path}")
+            return False
+        try:
+            obj = torch.load(path, map_location="cpu")
+            if isinstance(obj, dict):
+                context = obj.get("context")
+                indices = obj.get("text_token_indices")
+            else:
+                context = obj
+                indices = None
+
+            if not isinstance(context, torch.Tensor):
+                raise ValueError("missing tensor 'context'")
+            if context.ndim == 2:
+                context = context.unsqueeze(0)
+            if context.ndim != 3:
+                raise ValueError(f"expected [S,C] or [1,S,C], got shape {tuple(context.shape)}")
+            if context.shape[0] != 1:
+                raise ValueError("first dimension must be 1 for fixed prompt context")
+
+            self.precomputed_text_context = context.float()
+            self.context_dim = int(context.shape[-1])
+
+            if indices is None:
+                indices = [context.shape[1] - 1]
+                print("[TADiSR] ⚠ text_token_indices missing; defaulting to last token index.")
+            self.precomputed_text_indices = [int(i) for i in indices]
+            print(
+                f"[TADiSR] ✓ Loaded precomputed text context from {path}, "
+                f"shape={tuple(self.precomputed_text_context.shape)}, "
+                f"text_token_indices={self.precomputed_text_indices}"
+            )
+            return True
+        except Exception as e:
+            print(f"[TADiSR] ✗ Failed to load precomputed context: {e}")
+            return False
 
     def _apply_lora(self, rank):
         """Apply LoRA to UNet cross-attention layers (attn2 only) via peft.
@@ -623,18 +683,21 @@ class TADiSRWrapper(nn.Module):
         """Encode the fixed prompt using the text encoder."""
         if self.use_real_backbone:
             with torch.no_grad():
-                inputs = self.tokenizer(
-                    self.FIXED_PROMPT,
-                    return_tensors="pt",
-                    padding="max_length",
-                    max_length=256,
-                    truncation=True,
-                ).to(device)
-                outputs = self.text_encoder(**inputs)
-                # ChatGLM returns last_hidden_state
-                context = outputs.last_hidden_state
-                # Expand to batch size
-                context = context.expand(batch_size, -1, -1)
+                if self.precomputed_text_context is not None:
+                    context = self.precomputed_text_context.to(device).expand(batch_size, -1, -1)
+                else:
+                    inputs = self.tokenizer(
+                        self.FIXED_PROMPT,
+                        return_tensors="pt",
+                        padding="max_length",
+                        max_length=256,
+                        truncation=True,
+                    ).to(device)
+                    outputs = self.text_encoder(**inputs)
+                    # ChatGLM returns last_hidden_state
+                    context = outputs.last_hidden_state
+                    # Expand to batch size
+                    context = context.expand(batch_size, -1, -1)
             return context
         else:
             return self._fallback_context.expand(batch_size, -1, -1).to(device)
