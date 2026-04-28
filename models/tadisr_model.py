@@ -726,10 +726,18 @@ class TADiSRWrapper(nn.Module):
             # Fix M1: Clear previous attention maps
             self.taca_manager.clear()
 
+            added_cond_kwargs = self._build_unet_added_cond_kwargs(
+                context=context,
+                batch_size=z_noisy.shape[0],
+                device=z_noisy.device,
+                dtype=z_noisy.dtype,
+            )
+
             # Forward through UNet — TACA processors capture attention maps
             noise_pred = self.unet_backbone(
                 z_noisy, timesteps,
                 encoder_hidden_states=context,
+                added_cond_kwargs=added_cond_kwargs,
             ).sample
 
             # Fix M1: Aggregate attention maps from all M cross-attention layers
@@ -737,6 +745,46 @@ class TADiSRWrapper(nn.Module):
             return noise_pred, a_tex
         else:
             return self.unet_fb(z_noisy, timesteps, context, text_token_indices)
+
+    def _build_unet_added_cond_kwargs(self, context, batch_size, device, dtype):
+        """Build added_cond_kwargs required by some Kolors UNet variants.
+
+        Newer diffusers UNet forward paths may expect a dict-like object and, for
+        specific ``addition_embed_type`` settings, explicit ``text_embeds`` and/or
+        ``time_ids`` entries.
+        """
+        embed_type = getattr(self.unet_backbone.config, "addition_embed_type", None)
+
+        if embed_type is None:
+            return {}
+
+        # Use simple mean pooling of token embeddings as text_embeds fallback.
+        # Shape: [B, C]
+        text_embeds = context.mean(dim=1).to(device=device, dtype=dtype)
+        added = {"text_embeds": text_embeds}
+
+        # For SDXL-like "text_time" augmentation, also provide time_ids.
+        if embed_type == "text_time":
+            # Infer raw time_ids length from add-embedding input size when possible.
+            time_ids_len = None
+            add_time_embed_dim = getattr(self.unet_backbone.config, "addition_time_embed_dim", None)
+            linear_1 = getattr(getattr(self.unet_backbone, "add_embedding", None), "linear_1", None)
+            if add_time_embed_dim and linear_1 is not None:
+                in_features = int(getattr(linear_1, "in_features", 0))
+                text_dim = int(text_embeds.shape[-1])
+                remain = in_features - text_dim
+                if remain > 0 and remain % int(add_time_embed_dim) == 0:
+                    time_ids_len = remain // int(add_time_embed_dim)
+            if time_ids_len is None:
+                # Common fallback used in SDXL-family pipelines.
+                time_ids_len = 6
+            added["time_ids"] = torch.zeros(
+                (batch_size, int(time_ids_len)),
+                device=device,
+                dtype=dtype,
+            )
+
+        return added
 
     def _get_schedule_params(self, t: int, device):
         """Get α_t, β_t coefficients for the one-step denoising formula.
