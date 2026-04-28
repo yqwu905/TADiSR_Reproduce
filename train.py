@@ -14,7 +14,10 @@ import os
 import argparse
 import torch
 import torch.optim as optim
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data.distributed import DistributedSampler
 
 from models.tadisr_model import TADiSRWrapper
 from losses.composite_loss import CompositeTADiSRLoss
@@ -74,19 +77,79 @@ def _create_dummy_dataset(args):
     return DummyDataset()
 
 
+def setup_distributed(args):
+    """Initialize DDP from torchrun env vars if available."""
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    distributed = world_size > 1
+
+    if not distributed:
+        return {
+            "distributed": False,
+            "rank": 0,
+            "local_rank": 0,
+            "world_size": 1,
+            "device": torch.device(args.device),
+        }
+
+    if not dist.is_initialized():
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=backend, init_method="env://")
+
+    rank = dist.get_rank()
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+    else:
+        device = torch.device("cpu")
+
+    return {
+        "distributed": True,
+        "rank": rank,
+        "local_rank": local_rank,
+        "world_size": world_size,
+        "device": device,
+    }
+
+
+def cleanup_distributed(ddp_state):
+    if ddp_state["distributed"] and dist.is_initialized():
+        dist.destroy_process_group()
+
+
 def train(args):
-    device = args.device
-    print(f"Starting TADiSR training on {device}...")
-    print(f"  LR: {args.lr}, Batch size: {args.batch_size}")
-    print(f"  Max iterations: {args.max_iters}")
-    print(f"  Gradient clip: {args.grad_clip}")
+    ddp_state = setup_distributed(args)
+    is_main = ddp_state["rank"] == 0
+    device = ddp_state["device"]
+
+    if is_main:
+        print(f"Starting TADiSR training on {device}...")
+        print(f"  LR: {args.lr}, Batch size(per-process): {args.batch_size}")
+        print(f"  Max iterations: {args.max_iters}")
+        print(f"  Gradient clip: {args.grad_clip}")
+        if ddp_state["distributed"]:
+            print(f"  DDP enabled — world_size: {ddp_state['world_size']}")
 
     # 1. Dataset
     dataset = create_datasets(args)
+    sampler = None
+    shuffle = True
+    if ddp_state["distributed"]:
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=ddp_state["world_size"],
+            rank=ddp_state["rank"],
+            shuffle=True,
+            drop_last=True,
+        )
+        shuffle = False
+
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=shuffle,
+        sampler=sampler,
         collate_fn=tadisr_collate_fn,
         num_workers=0,  # For CPU testing
         drop_last=True,
@@ -103,8 +166,18 @@ def train(args):
     trainable_params = model.get_trainable_params()
     total_params = sum(p.numel() for p in model.parameters())
     train_params = sum(p.numel() for p in trainable_params)
-    print(f"  Total params:     {total_params:,}")
-    print(f"  Trainable params: {train_params:,} ({100*train_params/total_params:.2f}%)")
+    if is_main:
+        print(f"  Total params:     {total_params:,}")
+        print(f"  Trainable params: {train_params:,} ({100*train_params/total_params:.2f}%)")
+
+    if ddp_state["distributed"]:
+        model = DDP(
+            model,
+            device_ids=[ddp_state["local_rank"]] if device.type == "cuda" else None,
+            output_device=ddp_state["local_rank"] if device.type == "cuda" else None,
+            find_unused_parameters=False,
+        )
+    raw_model = model.module if ddp_state["distributed"] else model
 
     optimizer = optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
 
@@ -126,6 +199,9 @@ def train(args):
     global_step = 0
 
     for ep in range(args.epochs):
+        if sampler is not None:
+            sampler.set_epoch(ep)
+
         for step, batch in enumerate(loader):
             if global_step >= args.max_iters:
                 break
@@ -139,7 +215,7 @@ def train(args):
             optimizer.zero_grad()
 
             # Forward — Paper loss: ℓ_tot = ℓ_img + ℓ_seg (NO noise loss)
-            x_pred, s_pred = model.forward_train(
+            x_pred, s_pred = raw_model.forward_train(
                 lr_img, context, text_indices
             )
 
@@ -157,7 +233,7 @@ def train(args):
 
             global_step += 1
 
-            if global_step % args.log_every == 0:
+            if is_main and global_step % args.log_every == 0:
                 current_lr = optimizer.param_groups[0]['lr']
                 print(
                     f"[Step {global_step:6d}] "
@@ -168,19 +244,19 @@ def train(args):
                 )
 
             # Save checkpoint
-            if args.save_every > 0 and global_step % args.save_every == 0:
+            if is_main and args.save_every > 0 and global_step % args.save_every == 0:
                 ckpt_path = os.path.join(args.ckpt_dir, f"tadisr_step{global_step}.pt")
                 os.makedirs(args.ckpt_dir, exist_ok=True)
                 # Fix T2: Filter by parameter name, not by requires_grad on
                 # detached state_dict tensors (which is always False)
                 trainable_names = {id(p) for p in trainable_params}
                 save_keys = set()
-                for name, param in model.named_parameters():
+                for name, param in raw_model.named_parameters():
                     if id(param) in trainable_names:
                         save_keys.add(name)
                     elif 'jsd' in name or 'taca' in name:
                         save_keys.add(name)
-                model_sd = model.state_dict()
+                model_sd = raw_model.state_dict()
                 save_sd = {k: v for k, v in model_sd.items() if k in save_keys}
                 torch.save({
                     'step': global_step,
@@ -193,7 +269,9 @@ def train(args):
         if global_step >= args.max_iters:
             break
 
-    print(f"\nTraining complete! {global_step} iterations.")
+    if is_main:
+        print(f"\nTraining complete! {global_step} iterations.")
+    cleanup_distributed(ddp_state)
 
 
 if __name__ == "__main__":
