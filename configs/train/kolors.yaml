@@ -5,7 +5,8 @@ context_dim: 4096
 jsd_dim: 128
 lora_rank: 16
 device: npu
-batch_size: 3
+batch_size: 1
+dist_strategy: fsdp  # ddp | fsdp
 lr: 0.00005
 grad_clip: 1.0
 warmup_iters: 0
@@ -15,3 +16,4 @@ log_every: 10
 save_every: 5000
 ckpt_dir: checkpoints
 tensorboard_log_dir: checkpoints/tensorboard
+precomputed_text_context_path: embedding.pt

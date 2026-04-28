@@ -342,7 +342,7 @@ def test_full_model_forward():
     context = torch.randn(B, 77, 4096)
     text_indices = [5]
 
-    x_hr_pred, s_mask_pred = model.forward_train(x_L, context, text_indices)
+    x_hr_pred, s_mask_pred = model.forward(x_L, context, text_indices)
 
     # Fix M4: LR is upsampled 4× (128→512) before VAE encoding
     # VAE encodes 512×512 → 64×64 latent (8× downsample)
@@ -361,10 +361,10 @@ def test_full_model_forward():
     assert model.FIXED_TIMESTEP == 200, "Paper: t is fixed as 200"
     assert model.TOTAL_TIMESTEPS == 1000, "Standard DDPM: T=1000"
 
-    # forward_train returns only (x_hr_pred, s_mask_pred), NOT noise/noise_pred
-    result = model.forward_train(x_L, context, text_indices)
+    # forward returns only (x_hr_pred, s_mask_pred), NOT noise/noise_pred
+    result = model.forward(x_L, context, text_indices)
     assert len(result) == 2, \
-        f"forward_train should return 2 values (x_hr, s_mask), got {len(result)}"
+        f"forward should return 2 values (x_hr, s_mask), got {len(result)}"
 
     # Verify trainable params separation
     trainable = model.get_trainable_params()
@@ -373,7 +373,7 @@ def test_full_model_forward():
     print(f"  ✓ Input: x_L {x_L.shape}")
     print(f"  ✓ Output: x_hr {x_hr_pred.shape}, s_mask {s_mask_pred.shape}")
     print(f"  ✓ Fixed timestep t=200, T=1000")
-    print(f"  ✓ forward_train returns (x_hr, s_mask) — NO noise prediction output")
+    print(f"  ✓ forward returns (x_hr, s_mask) — NO noise prediction output")
     print(f"  ✓ Trainable params: {sum(p.numel() for p in trainable):,}")
     print()
 
@@ -410,7 +410,7 @@ def test_training_loop():
 
         optimizer.zero_grad()
 
-        x_pred, s_pred = model.forward_train(x_L, context, [5])
+        x_pred, s_pred = model.forward(x_L, context, [5])
         loss, loss_img, loss_seg = criterion(x_pred, x_H, s_pred, mask)
 
         loss.backward()

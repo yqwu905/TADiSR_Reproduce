@@ -10,7 +10,7 @@ Usage:
 import argparse
 import os
 import torch
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, AutoConfig
 
 
 def parse_args():
@@ -28,12 +28,22 @@ def main():
     args = parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(
-        args.pretrained_path, subfolder="text_encoder", trust_remote_code=True
+        f'{args.pretrained_path}/text_encoder', trust_remote_code=True
     )
+    config = AutoConfig.from_pretrained(
+        f'{args.pretrained_path}/text_encoder',
+        trust_remote_code=True,
+        local_files_only=True,
+    )
+    config.auto_map["AutoModel"] = "modeling_chatglm.ChatGLMModel"
     text_encoder = AutoModel.from_pretrained(
-        args.pretrained_path, subfolder="text_encoder", trust_remote_code=True,
-        torch_dtype=torch.float32,
-    )
+        f'{args.pretrained_path}/text_encoder',
+        config=config,
+        trust_remote_code=True,
+        local_files_only=True,
+        torch_dtype=torch.float16,
+    ).half().eval()
+    text_encoder.requires_grad_(False)
     text_encoder.eval()
 
     with torch.no_grad():

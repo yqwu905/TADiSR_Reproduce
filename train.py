@@ -513,7 +513,7 @@ def train(args):
 
             with _autocast_context(device, precision_name, precision_dtype):
                 # Forward — Paper loss: ℓ_tot = ℓ_img + ℓ_seg (NO noise loss)
-                x_pred, s_pred = model.forward_train(
+                x_pred, s_pred = model.forward(
                     lr_img, context, text_indices
                 )
 

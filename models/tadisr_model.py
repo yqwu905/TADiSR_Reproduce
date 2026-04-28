@@ -1055,7 +1055,7 @@ class TADiSRWrapper(nn.Module):
         z_noisy = torch.sqrt(alpha_bar_t) * z + torch.sqrt(1.0 - alpha_bar_t) * noise
         return z_noisy, noise
 
-    def forward_train(self, x_L, context=None, text_token_indices=None):
+    def forward(self, x_L, context=None, text_token_indices=None):
         """
         Training forward pass.
 
