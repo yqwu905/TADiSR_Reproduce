@@ -36,3 +36,5 @@ Thumbs.db
 *.pt
 *.ckpt
 *.safetensors
+
+dataset/
