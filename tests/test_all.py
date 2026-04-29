@@ -17,6 +17,7 @@ Tests verify:
 """
 import sys
 import os
+import subprocess
 import tempfile
 import torch
 import numpy as np
@@ -728,6 +729,152 @@ def test_legacy_checkpoint_resume_compatibility():
     print()
 
 
+def test_inference_checkpoint_load():
+    """Test inference-only checkpoint loading from v2 training payload."""
+    print("=" * 60)
+    print("TEST: Inference Checkpoint Load")
+    print("=" * 60)
+
+    from infer import load_inference_checkpoint
+    from train import CHECKPOINT_VERSION, _checkpoint_trainable_state_dict
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model = _make_checkpoint_test_model()
+        trainable_params = model.get_trainable_params()
+        model_state = _checkpoint_trainable_state_dict(model, trainable_params)
+        ckpt_path = os.path.join(tmpdir, "tadisr_step3.pt")
+        torch.save(
+            {
+                "checkpoint_version": CHECKPOINT_VERSION,
+                "step": 3,
+                "model_state_dict": model_state,
+            },
+            ckpt_path,
+        )
+
+        resumed_model = _make_checkpoint_test_model()
+        load_state = load_inference_checkpoint(resumed_model, ckpt_path, is_main=False)
+        assert load_state["checkpoint_version"] == CHECKPOINT_VERSION
+        assert load_state["loaded_tensors"] == len(model_state)
+
+        original_sd = model.state_dict()
+        resumed_sd = resumed_model.state_dict()
+        for key in model_state:
+            assert torch.equal(original_sd[key], resumed_sd[key]), f"Mismatch after inference load: {key}"
+
+    print("  ✓ Inference loader accepts v2 checkpoint model_state_dict only")
+    print("  ✓ Optimizer/scheduler/scaler are not required for inference")
+    print()
+
+
+def test_inference_pad_crop_helpers():
+    """Test odd LR dimensions are padded for model input and cropped back to 4x."""
+    print("=" * 60)
+    print("TEST: Inference Pad/Crop Helpers")
+    print("=" * 60)
+
+    from infer import crop_sr_to_original, pad_lr_tensor_to_even
+
+    lr = torch.rand(1, 3, 17, 19)
+    padded, original_size = pad_lr_tensor_to_even(lr, multiple=16)
+    assert original_size == (17, 19)
+    assert padded.shape[-2:] == (32, 32), f"Unexpected padded shape: {padded.shape}"
+
+    sr = torch.rand(1, 3, 128, 128)
+    mask = torch.rand(1, 1, 128, 128)
+    sr_cropped = crop_sr_to_original(sr, original_size, scale=4)
+    mask_cropped = crop_sr_to_original(mask, original_size, scale=4)
+    assert sr_cropped.shape[-2:] == (68, 76), f"Unexpected SR crop: {sr_cropped.shape}"
+    assert mask_cropped.shape[-2:] == (68, 76), f"Unexpected mask crop: {mask_cropped.shape}"
+
+    print("  ✓ Odd LR dimensions pad to model-compatible even dimensions")
+    print("  ✓ SR and mask crop back to original 4× target size")
+    print()
+
+
+def test_inference_cli_smoke():
+    """Smoke test infer.py with lightweight fallback model, image IO, SR, and mask output."""
+    print("=" * 60)
+    print("TEST: Inference CLI Smoke")
+    print("=" * 60)
+
+    from PIL import Image
+    from train import CHECKPOINT_VERSION
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg_path = os.path.join(tmpdir, "infer_cpu.yaml")
+        ckpt_path = os.path.join(tmpdir, "fallback.pt")
+        input_path = os.path.join(tmpdir, "odd_input.png")
+        output_dir = os.path.join(tmpdir, "outputs")
+
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "use_kolors: false",
+                        "context_dim: 128",
+                        "jsd_dim: 16",
+                        "lora_rank: 2",
+                        "taca_query_chunk_size: 64",
+                        "taca_checkpoint: false",
+                        "taca_detach: false",
+                        "fail_on_lora_error: true",
+                    ]
+                )
+            )
+
+        model = _make_checkpoint_test_model()
+        torch.save(
+            {
+                "checkpoint_version": CHECKPOINT_VERSION,
+                "step": 1,
+                "model_state_dict": model.state_dict(),
+            },
+            ckpt_path,
+        )
+
+        image = (np.random.rand(17, 19, 3) * 255.0).astype(np.uint8)
+        Image.fromarray(image).save(input_path)
+
+        cmd = [
+            sys.executable,
+            os.path.join(repo_root, "infer.py"),
+            "--config",
+            cfg_path,
+            "--checkpoint",
+            ckpt_path,
+            "--input",
+            input_path,
+            "--output",
+            output_dir,
+            "--device",
+            "cpu",
+            "--precision",
+            "fp32",
+            "--save-mask",
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        sr_path = os.path.join(output_dir, "odd_input_sr.png")
+        mask_path = os.path.join(output_dir, "odd_input_mask.png")
+        assert os.path.isfile(sr_path), result.stdout + result.stderr
+        assert os.path.isfile(mask_path), result.stdout + result.stderr
+        assert Image.open(sr_path).size == (76, 68)
+        assert Image.open(mask_path).size == (76, 68)
+
+    print("  ✓ infer.py writes SR and mask outputs")
+    print("  ✓ CLI output size matches original odd input dimensions ×4")
+    print()
+
+
 def test_degradation_pipeline():
     """Test Real-ESRGAN degradation (Paper Section 3.5)."""
     print("=" * 60)
@@ -1171,6 +1318,9 @@ def run_all_tests():
         ("Checkpoint Save (Fix T2)", test_checkpoint_save),
         ("Checkpoint Resume Roundtrip", test_checkpoint_resume_roundtrip),
         ("Legacy Checkpoint Resume Compatibility", test_legacy_checkpoint_resume_compatibility),
+        ("Inference Checkpoint Load", test_inference_checkpoint_load),
+        ("Inference Pad/Crop Helpers", test_inference_pad_crop_helpers),
+        ("Inference CLI Smoke", test_inference_cli_smoke),
         ("Degradation Pipeline", test_degradation_pipeline),
         ("Dataset & Collate", test_dataset),
     ]

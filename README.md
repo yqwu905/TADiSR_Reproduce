@@ -501,7 +501,52 @@ precomputed_text_context_path: assets/fixed_prompt_context.pt
 
 并跳过 ChatGLM 在线编码。
 
-### 6.3 CPU 调试模式
+### 6.3 单图 / 批量推理
+
+推理入口为单进程脚本 `infer.py`，默认面向当前 NPU + bf16 训练路径。真实 Kolors 推理需要同时准备：
+
+- Kolors base 模型目录（默认使用代码中的 `/home/models/Kolors/`，也可用 `--pretrained-path` 指定）
+- 训练保存的 v2 checkpoint（如 `checkpoints/tadisr_step5000.pt`）
+- 固定 prompt embedding（如 `embedding.pt` 或 `assets/fixed_prompt_context.pt`）
+
+单张图片推理：
+
+```bash
+python infer.py \
+  --config configs/train/kolors.yaml \
+  --checkpoint checkpoints/tadisr_step5000.pt \
+  --input path/to/lr.png \
+  --output outputs/infer \
+  --device npu \
+  --precision bf16 \
+  --pretrained-path /home/models/Kolors/ \
+  --precomputed-text-context embedding.pt \
+  --save-mask
+```
+
+目录批量推理：
+
+```bash
+python infer.py \
+  --config configs/train/kolors.yaml \
+  --checkpoint checkpoints/tadisr_step5000.pt \
+  --input path/to/lr_dir \
+  --output outputs/infer \
+  --device npu \
+  --precision bf16 \
+  --precomputed-text-context embedding.pt \
+  --save-mask \
+  --save-debug
+```
+
+输出文件：
+- SR 图像：`<stem>_sr.png`
+- 文本 mask：`<stem>_mask.png`
+- TACA heatmap（仅 `--save-debug`）：`<stem>_taca.png`
+
+如果 LR 图片宽高不是模型兼容的偶数尺寸，脚本会先复制边界 padding（默认 pad 到 16 的倍数），推理后再裁回原始尺寸的 4× 输出，保证最终 SR/mask 尺寸为 `H*4 × W*4`。
+
+### 6.4 CPU 调试模式
 
 不加载 Kolors 骨干，使用轻量级替代组件：
 
@@ -517,7 +562,7 @@ python train.py --config configs/train/cpu_debug.yaml
 - 文本上下文 → 随机固定张量
 - JSD → 使用 `[32, 64, 128, 128]` 小通道配置
 
-### 6.4 多 GPU 分布式训练
+### 6.5 多 GPU 分布式训练
 
 使用 PyTorch `torchrun` 进行分布式训练：
 
@@ -534,7 +579,7 @@ dist_strategy: ddp   # 默认
 
 > `fsdp` 需要加速器设备（`device: cuda` 或 `device: npu`）；NPU 场景依赖 `torch_npu`/环境对 FSDP 的支持。
 
-### 6.5 训练流程详解
+### 6.6 训练流程详解
 
 每个训练 step 的完整流程：
 
@@ -562,7 +607,7 @@ dist_strategy: ddp   # 默认
 11. 反向传播（仅更新可训练参数）
 ```
 
-### 6.6 可训练参数
+### 6.7 可训练参数
 
 | 模块 | 说明 | 初始化 |
 |------|------|--------|
@@ -574,7 +619,7 @@ dist_strategy: ddp   # 默认
 
 **冻结参数**：VAE 编码器、ChatGLM 文本编码器、UNet 主干（非 LoRA 部分）、JSD 图像解码器基础权重。
 
-### 6.7 Checkpoint 保存
+### 6.8 Checkpoint 保存
 
 训练过程中每 `--save_every` 步保存一次，仅保存可训练参数：
 
