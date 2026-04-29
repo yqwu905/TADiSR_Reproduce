@@ -848,6 +848,45 @@ def test_vae_normalization_helpers():
     print()
 
 
+def test_real_vae_encode_casts_to_vae_dtype():
+    """Real-backbone VAE encoding should match VAE parameter dtype."""
+    print("=" * 60)
+    print("TEST: Real VAE Encode Dtype Cast")
+    print("=" * 60)
+
+    import torch.nn as nn
+    from types import SimpleNamespace
+    from models.tadisr_model import TADiSRWrapper
+
+    class FakeVAE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.probe = nn.Parameter(torch.zeros((), dtype=torch.bfloat16))
+            self.config = SimpleNamespace(scaling_factor=0.5)
+            self.seen_dtype = None
+
+        def encode(self, x):
+            self.seen_dtype = x.dtype
+            mean = torch.ones(
+                x.shape[0], 4, x.shape[2] // 8, x.shape[3] // 8,
+                device=x.device, dtype=x.dtype,
+            )
+            return SimpleNamespace(latent_dist=SimpleNamespace(mean=mean))
+
+    model = TADiSRWrapper.__new__(TADiSRWrapper)
+    nn.Module.__init__(model)
+    model.use_real_backbone = True
+    model.vae = FakeVAE()
+
+    z = model._encode_image(torch.rand(1, 3, 64, 64, dtype=torch.float32))
+    assert model.vae.seen_dtype == torch.bfloat16, model.vae.seen_dtype
+    assert z.dtype == torch.bfloat16, z.dtype
+
+    print("  ✓ Float32 image input is cast to bf16 before VAE encode")
+    print("  ✓ Encoded latent keeps VAE dtype")
+    print()
+
+
 def run_all_tests():
     """Run all tests."""
     print("\n" + "=" * 60)
@@ -868,6 +907,7 @@ def run_all_tests():
         ("LoRAConv2d Flattened Param Views", test_lora_conv2d_flattened_param_views),
         ("Diffusers TACA Integration", test_diffusers_taca_integration),
         ("VAE Normalization Helpers", test_vae_normalization_helpers),
+        ("Real VAE Encode Dtype Cast", test_real_vae_encode_casts_to_vae_dtype),
         ("Full Model Forward", test_full_model_forward),
         ("Training Loop", test_training_loop),
         ("Checkpoint Save (Fix T2)", test_checkpoint_save),

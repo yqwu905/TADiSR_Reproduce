@@ -523,7 +523,12 @@ def train(args):
                 )
 
                 # Calculate composite loss
-                loss, loss_img, loss_seg = criterion(x_pred, hr_img, s_pred, mask)
+                loss, loss_img, loss_seg = criterion(
+                    x_pred.float(),
+                    hr_img.float(),
+                    s_pred.float(),
+                    mask.float(),
+                )
             loss_for_backward = loss.float()
 
             # Backward with gradient clipping

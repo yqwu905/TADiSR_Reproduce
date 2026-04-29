@@ -938,7 +938,9 @@ class TADiSRWrapper(nn.Module):
         """Encode image to latent space using VAE encoder."""
         if self.use_real_backbone:
             with torch.no_grad():
-                latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
+                vae_dtype = next(self.vae.parameters()).dtype
+                vae_input = self._normalize_vae_input(x).to(dtype=vae_dtype)
+                latent_dist = self.vae.encode(vae_input).latent_dist
                 z = latent_dist.mean  # Deterministic encoding
                 z = z * self.vae.config.scaling_factor
             return z
