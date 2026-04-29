@@ -1,7 +1,13 @@
-W0429 10:03:26.907000 727571 site-packages/torch/distributed/run.py:803] 
-W0429 10:03:26.907000 727571 site-packages/torch/distributed/run.py:803] *****************************************
-W0429 10:03:26.907000 727571 site-packages/torch/distributed/run.py:803] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
-W0429 10:03:26.907000 727571 site-packages/torch/distributed/run.py:803] *****************************************
+W0429 10:13:12.029000 738191 site-packages/torch/distributed/run.py:803] 
+W0429 10:13:12.029000 738191 site-packages/torch/distributed/run.py:803] *****************************************
+W0429 10:13:12.029000 738191 site-packages/torch/distributed/run.py:803] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0429 10:13:12.029000 738191 site-packages/torch/distributed/run.py:803] *****************************************
+[Data] FTSR: 50000 samples from dataset/FTSR
+[Data] Real-CE not found at None (optional)
+[Data] FTSR: 50000 samples from dataset/FTSR
+[Data] Real-CE not found at None (optional)
+[Data] FTSR: 50000 samples from dataset/FTSR
+[Data] Real-CE not found at None (optional)
 [Data] FTSR: 50000 samples from dataset/FTSR
 [Data] Real-CE not found at None (optional)
 Starting TADiSR training on npu:0...
@@ -21,14 +27,6 @@ Starting TADiSR training on npu:0...
 [Data] Real-CE not found at None (optional)
 [Data] FTSR: 50000 samples from dataset/FTSR
 [Data] Real-CE not found at None (optional)
-/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/transformers/transformer_2d.py:34: FutureWarning: `Transformer2DModelOutput` is deprecated and will be removed in version 1.0.0. Importing `Transformer2DModelOutput` from `diffusers.models.transformer_2d` is deprecated and this will be removed in a future version. Please use `from diffusers.models.modeling_outputs import Transformer2DModelOutput`, instead.
-  deprecate("Transformer2DModelOutput", "1.0.0", deprecation_message)
-[Data] FTSR: 50000 samples from dataset/FTSR
-[Data] Real-CE not found at None (optional)
-[Data] FTSR: 50000 samples from dataset/FTSR
-[Data] Real-CE not found at None (optional)
-[Data] FTSR: 50000 samples from dataset/FTSR
-[Data] Real-CE not found at None (optional)
 [Data] FTSR: 50000 samples from dataset/FTSR
 [Data] Real-CE not found at None (optional)
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/transformers/transformer_2d.py:34: FutureWarning: `Transformer2DModelOutput` is deprecated and will be removed in version 1.0.0. Importing `Transformer2DModelOutput` from `diffusers.models.transformer_2d` is deprecated and this will be removed in a future version. Please use `from diffusers.models.modeling_outputs import Transformer2DModelOutput`, instead.
@@ -37,7 +35,6 @@ Starting TADiSR training on npu:0...
   deprecate("Transformer2DModelOutput", "1.0.0", deprecation_message)
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/transformers/transformer_2d.py:34: FutureWarning: `Transformer2DModelOutput` is deprecated and will be removed in version 1.0.0. Importing `Transformer2DModelOutput` from `diffusers.models.transformer_2d` is deprecated and this will be removed in a future version. Please use `from diffusers.models.modeling_outputs import Transformer2DModelOutput`, instead.
   deprecate("Transformer2DModelOutput", "1.0.0", deprecation_message)
-[TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/transformers/transformer_2d.py:34: FutureWarning: `Transformer2DModelOutput` is deprecated and will be removed in version 1.0.0. Importing `Transformer2DModelOutput` from `diffusers.models.transformer_2d` is deprecated and this will be removed in a future version. Please use `from diffusers.models.modeling_outputs import Transformer2DModelOutput`, instead.
   deprecate("Transformer2DModelOutput", "1.0.0", deprecation_message)
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/transformers/transformer_2d.py:34: FutureWarning: `Transformer2DModelOutput` is deprecated and will be removed in version 1.0.0. Importing `Transformer2DModelOutput` from `diffusers.models.transformer_2d` is deprecated and this will be removed in a future version. Please use `from diffusers.models.modeling_outputs import Transformer2DModelOutput`, instead.
@@ -46,6 +43,8 @@ Starting TADiSR training on npu:0...
   deprecate("Transformer2DModelOutput", "1.0.0", deprecation_message)
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/transformers/transformer_2d.py:34: FutureWarning: `Transformer2DModelOutput` is deprecated and will be removed in version 1.0.0. Importing `Transformer2DModelOutput` from `diffusers.models.transformer_2d` is deprecated and this will be removed in a future version. Please use `from diffusers.models.modeling_outputs import Transformer2DModelOutput`, instead.
   deprecate("Transformer2DModelOutput", "1.0.0", deprecation_message)
+/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/transformers/transformer_2d.py:34: FutureWarning: `Transformer2DModelOutput` is deprecated and will be removed in version 1.0.0. Importing `Transformer2DModelOutput` from `diffusers.models.transformer_2d` is deprecated and this will be removed in a future version. Please use `from diffusers.models.modeling_outputs import Transformer2DModelOutput`, instead.
+  deprecate("Transformer2DModelOutput", "1.0.0", deprecation_message)
 [TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
 [TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
 [TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
@@ -53,34 +52,7 @@ Starting TADiSR training on npu:0...
 [TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
 [TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
 [TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
-[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
-[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
-[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
-[TACA] Replaced 70 attn2 processors
-[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
-[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
-[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
-[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
-[TACA] Replaced 70 attn2 processors
-[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
-[TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
-[TADiSR] Targeted 280 attn2 modules
-[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
-[TADiSR] ✓ Kolors backbone initialized with LoRA rank=16
-[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
-[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
-[TACA] Replaced 70 attn2 processors
-[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
-[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
-[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
-[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
-[TACA] Replaced 70 attn2 processors
-[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
-[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
-[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
-[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
-[TACA] Replaced 70 attn2 processors
-[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
+[TADiSR] ✓ Loaded Kolors VAE from /home/models/Kolors/
 [TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
 [TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
 [TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
@@ -99,15 +71,43 @@ Starting TADiSR training on npu:0...
 [TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
 [TADiSR] Targeted 280 attn2 modules
 [TADiSR] ✓ Kolors backbone initialized with LoRA rank=16
+[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
+[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
+[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
+[TACA] Replaced 70 attn2 processors
+[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
+[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
+[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
+[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
+[TACA] Replaced 70 attn2 processors
+[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
+[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
+[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
+[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
+[TACA] Replaced 70 attn2 processors
+[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
+[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
+[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
+[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
+[TACA] Replaced 70 attn2 processors
+[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
+[TADiSR] ✓ Loaded Kolors UNet from /home/models/Kolors/
+[TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
+[TADiSR] Targeted 280 attn2 modules
+[TADiSR] ✓ Loaded precomputed text context from embedding.pt, shape=(1, 256, 4096), text_token_indices=[7]
+[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.
+[TADiSR] ✓ Kolors backbone initialized with LoRA rank=16
+[TACA] Replaced 70 attn2 processors
+[TACA] Installed 70 TACA processors, total_heads=1300, proj → 4, chunk=1024, checkpoint=True, detach=False
+[TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
+[TADiSR] Targeted 280 attn2 modules
 [JSD] Loaded 138/138 tensors from VAE decoder
+[TADiSR] ✓ Kolors backbone initialized with LoRA rank=16
 [JSD] Applied LoRA (rank=16) to 35 Conv2d layers in Image Decoder
 [JSD] Parameters: total=167,186,548, trainable=117,696,369, frozen=49,490,179
 [JSD]   Image Decoder (LoRA): 411,760 trainable
 [JSD]   Seg Decoder: 49,487,873 total (all trainable)
 [JSD]   CDIBs: 67,796,736 total (all trainable)
-[TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
-[TADiSR] Targeted 280 attn2 modules
-[TADiSR] ✓ Kolors backbone initialized with LoRA rank=16
 [TADiSR] Enabled UNet gradient checkpointing
 [TADiSR] Enabled JSD gradient checkpointing
 [TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
@@ -122,18 +122,18 @@ Starting TADiSR training on npu:0...
 [TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
 [TADiSR] Targeted 280 attn2 modules
 [TADiSR] ✓ Kolors backbone initialized with LoRA rank=16
+[JSD] Loaded 138/138 tensors from VAE decoder
+[JSD] Applied LoRA (rank=16) to 35 Conv2d layers in Image Decoder
+[JSD] Parameters: total=167,186,548, trainable=117,696,369, frozen=49,490,179
+[JSD]   Image Decoder (LoRA): 411,760 trainable
+[JSD]   Seg Decoder: 49,487,873 total (all trainable)
+[JSD]   CDIBs: 67,796,736 total (all trainable)
+[TADiSR] Enabled UNet gradient checkpointing
+[TADiSR] Enabled JSD gradient checkpointing
+[JSD] Loaded 138/138 tensors from VAE decoder
 [TADiSR] LoRA (cross-attn only): 12,574,720 / 2,592,033,540 params trainable (0.49%)
 [TADiSR] Targeted 280 attn2 modules
 [TADiSR] ✓ Kolors backbone initialized with LoRA rank=16
-[JSD] Loaded 138/138 tensors from VAE decoder
-[JSD] Applied LoRA (rank=16) to 35 Conv2d layers in Image Decoder
-[JSD] Parameters: total=167,186,548, trainable=117,696,369, frozen=49,490,179
-[JSD]   Image Decoder (LoRA): 411,760 trainable
-[JSD]   Seg Decoder: 49,487,873 total (all trainable)
-[JSD]   CDIBs: 67,796,736 total (all trainable)
-[TADiSR] Enabled UNet gradient checkpointing
-[TADiSR] Enabled JSD gradient checkpointing
-[JSD] Loaded 138/138 tensors from VAE decoder
 [JSD] Applied LoRA (rank=16) to 35 Conv2d layers in Image Decoder
 [JSD] Parameters: total=167,186,548, trainable=117,696,369, frozen=49,490,179
 [JSD]   Image Decoder (LoRA): 411,760 trainable
@@ -166,12 +166,6 @@ Starting TADiSR training on npu:0...
 [TADiSR] Enabled UNet gradient checkpointing
 [TADiSR] Enabled JSD gradient checkpointing
 [JSD] Loaded 138/138 tensors from VAE decoder
-[JSD] Loaded 138/138 tensors from VAE decoder
-[JSD] Applied LoRA (rank=16) to 35 Conv2d layers in Image Decoder
-[JSD] Parameters: total=167,186,548, trainable=117,696,369, frozen=49,490,179
-[JSD]   Image Decoder (LoRA): 411,760 trainable
-[JSD]   Seg Decoder: 49,487,873 total (all trainable)
-[JSD]   CDIBs: 67,796,736 total (all trainable)
 [JSD] Applied LoRA (rank=16) to 35 Conv2d layers in Image Decoder
 [JSD] Parameters: total=167,186,548, trainable=117,696,369, frozen=49,490,179
 [JSD]   Image Decoder (LoRA): 411,760 trainable
@@ -179,6 +173,12 @@ Starting TADiSR training on npu:0...
 [JSD]   CDIBs: 67,796,736 total (all trainable)
 [TADiSR] Enabled UNet gradient checkpointing
 [TADiSR] Enabled JSD gradient checkpointing
+[JSD] Loaded 138/138 tensors from VAE decoder
+[JSD] Applied LoRA (rank=16) to 35 Conv2d layers in Image Decoder
+[JSD] Parameters: total=167,186,548, trainable=117,696,369, frozen=49,490,179
+[JSD]   Image Decoder (LoRA): 411,760 trainable
+[JSD]   Seg Decoder: 49,487,873 total (all trainable)
+[JSD]   CDIBs: 67,796,736 total (all trainable)
 [TADiSR] Enabled UNet gradient checkpointing
 [TADiSR] Enabled JSD gradient checkpointing
   Total params:     2,842,879,155
@@ -203,10 +203,10 @@ Starting TADiSR training on npu:0...
   warnings.warn(msg)
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
   warnings.warn(
-/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
-  warnings.warn(
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG16_Weights.IMAGENET1K_V1`. You can also use `weights=VGG16_Weights.DEFAULT` to get the most up-to-date weights.
   warnings.warn(msg)
+/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG16_Weights.IMAGENET1K_V1`. You can also use `weights=VGG16_Weights.DEFAULT` to get the most up-to-date weights.
   warnings.warn(msg)
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
@@ -222,337 +222,9 @@ Starting TADiSR training on npu:0...
 /root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG16_Weights.IMAGENET1K_V1`. You can also use `weights=VGG16_Weights.DEFAULT` to get the most up-to-date weights.
   warnings.warn(msg)
 Warning: since the loaded file is not a zipfile, only "torch.device" and "str" type parameters are currently supported for parameter types of map_location. If parameter types of map_location is "Callable[[torch.Tensor, str], torch.Tensor]" or "Dict[str, str]", which is only support for zipfile, all tensors are currently loaded onto the CPU, which may introduce problems.
-[rank4]: Traceback (most recent call last):
-[rank4]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank4]:     train(args)
-[rank4]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank4]:     x_pred, s_pred = model.forward(
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank4]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank4]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank4]:     return self._call_impl(*args, **kwargs)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank4]:     return forward_call(*args, **kwargs)
-[rank4]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank4]:     z_L = self._encode_image(x_L_up)
-[rank4]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank4]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank4]:     return method(self, *args, **kwargs)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank4]:     h = self.encoder(x)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank4]:     return self._call_impl(*args, **kwargs)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank4]:     return forward_call(*args, **kwargs)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank4]:     sample = self.conv_in(sample)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank4]:     return self._call_impl(*args, **kwargs)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank4]:     return forward_call(*args, **kwargs)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank4]:     return self._conv_forward(input, self.weight, self.bias)
-[rank4]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank4]:     return F.conv2d(
-[rank4]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[rank5]: Traceback (most recent call last):
-[rank5]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank5]:     train(args)
-[rank5]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank5]:     x_pred, s_pred = model.forward(
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank5]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank5]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank5]:     return self._call_impl(*args, **kwargs)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank5]:     return forward_call(*args, **kwargs)
-[rank5]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank5]:     z_L = self._encode_image(x_L_up)
-[rank5]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank5]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank5]:     return method(self, *args, **kwargs)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank5]:     h = self.encoder(x)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank5]:     return self._call_impl(*args, **kwargs)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank5]:     return forward_call(*args, **kwargs)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank5]:     sample = self.conv_in(sample)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank5]:     return self._call_impl(*args, **kwargs)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank5]:     return forward_call(*args, **kwargs)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank5]:     return self._conv_forward(input, self.weight, self.bias)
-[rank5]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank5]:     return F.conv2d(
-[rank5]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[rank2]: Traceback (most recent call last):
-[rank2]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank2]:     train(args)
-[rank2]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank2]:     x_pred, s_pred = model.forward(
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank2]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank2]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank2]:     return self._call_impl(*args, **kwargs)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank2]:     return forward_call(*args, **kwargs)
-[rank2]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank2]:     z_L = self._encode_image(x_L_up)
-[rank2]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank2]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank2]:     return method(self, *args, **kwargs)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank2]:     h = self.encoder(x)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank2]:     return self._call_impl(*args, **kwargs)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank2]:     return forward_call(*args, **kwargs)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank2]:     sample = self.conv_in(sample)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank2]:     return self._call_impl(*args, **kwargs)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank2]:     return forward_call(*args, **kwargs)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank2]:     return self._conv_forward(input, self.weight, self.bias)
-[rank2]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank2]:     return F.conv2d(
-[rank2]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[rank6]: Traceback (most recent call last):
-[rank6]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank6]:     train(args)
-[rank6]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank6]:     x_pred, s_pred = model.forward(
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank6]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank6]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank6]:     return self._call_impl(*args, **kwargs)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank6]:     return forward_call(*args, **kwargs)
-[rank6]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank6]:     z_L = self._encode_image(x_L_up)
-[rank6]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank6]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank6]:     return method(self, *args, **kwargs)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank6]:     h = self.encoder(x)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank6]:     return self._call_impl(*args, **kwargs)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank6]:     return forward_call(*args, **kwargs)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank6]:     sample = self.conv_in(sample)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank6]:     return self._call_impl(*args, **kwargs)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank6]:     return forward_call(*args, **kwargs)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank6]:     return self._conv_forward(input, self.weight, self.bias)
-[rank6]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank6]:     return F.conv2d(
-[rank6]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[rank7]: Traceback (most recent call last):
-[rank7]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank7]:     train(args)
-[rank7]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank7]:     x_pred, s_pred = model.forward(
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank7]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank7]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank7]:     return self._call_impl(*args, **kwargs)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank7]:     return forward_call(*args, **kwargs)
-[rank7]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank7]:     z_L = self._encode_image(x_L_up)
-[rank7]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank7]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank7]:     return method(self, *args, **kwargs)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank7]:     h = self.encoder(x)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank7]:     return self._call_impl(*args, **kwargs)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank7]:     return forward_call(*args, **kwargs)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank7]:     sample = self.conv_in(sample)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank7]:     return self._call_impl(*args, **kwargs)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank7]:     return forward_call(*args, **kwargs)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank7]:     return self._conv_forward(input, self.weight, self.bias)
-[rank7]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank7]:     return F.conv2d(
-[rank7]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[rank0]: Traceback (most recent call last):
-[rank0]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank0]:     train(args)
-[rank0]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank0]:     x_pred, s_pred = model.forward(
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank0]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank0]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank0]:     z_L = self._encode_image(x_L_up)
-[rank0]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank0]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank0]:     return method(self, *args, **kwargs)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank0]:     h = self.encoder(x)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank0]:     sample = self.conv_in(sample)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank0]:     return self._call_impl(*args, **kwargs)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank0]:     return forward_call(*args, **kwargs)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank0]:     return self._conv_forward(input, self.weight, self.bias)
-[rank0]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank0]:     return F.conv2d(
-[rank0]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[rank1]: Traceback (most recent call last):
-[rank1]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank1]:     train(args)
-[rank1]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank1]:     x_pred, s_pred = model.forward(
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank1]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank1]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank1]:     return self._call_impl(*args, **kwargs)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank1]:     return forward_call(*args, **kwargs)
-[rank1]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank1]:     z_L = self._encode_image(x_L_up)
-[rank1]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank1]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank1]:     return method(self, *args, **kwargs)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank1]:     h = self.encoder(x)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank1]:     return self._call_impl(*args, **kwargs)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank1]:     return forward_call(*args, **kwargs)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank1]:     sample = self.conv_in(sample)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank1]:     return self._call_impl(*args, **kwargs)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank1]:     return forward_call(*args, **kwargs)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank1]:     return self._conv_forward(input, self.weight, self.bias)
-[rank1]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank1]:     return F.conv2d(
-[rank1]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[rank3]: Traceback (most recent call last):
-[rank3]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 635, in <module>
-[rank3]:     train(args)
-[rank3]:   File "/home/w00906749/02_TextSR/02_TADiSR/train.py", line 521, in train
-[rank3]:     x_pred, s_pred = model.forward(
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1661, in forward
-[rank3]:     else self._run_ddp_forward(*inputs, **kwargs)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/parallel/distributed.py", line 1487, in _run_ddp_forward
-[rank3]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank3]:     return self._call_impl(*args, **kwargs)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank3]:     return forward_call(*args, **kwargs)
-[rank3]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 1094, in forward
-[rank3]:     z_L = self._encode_image(x_L_up)
-[rank3]:   File "/home/w00906749/02_TextSR/02_TADiSR/models/tadisr_model.py", line 941, in _encode_image
-[rank3]:     latent_dist = self.vae.encode(self._normalize_vae_input(x)).latent_dist
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/utils/accelerate_utils.py", line 46, in wrapper
-[rank3]:     return method(self, *args, **kwargs)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/autoencoder_kl.py", line 261, in encode
-[rank3]:     h = self.encoder(x)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank3]:     return self._call_impl(*args, **kwargs)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank3]:     return forward_call(*args, **kwargs)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/diffusers/models/autoencoders/vae.py", line 143, in forward
-[rank3]:     sample = self.conv_in(sample)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
-[rank3]:     return self._call_impl(*args, **kwargs)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
-[rank3]:     return forward_call(*args, **kwargs)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 548, in forward
-[rank3]:     return self._conv_forward(input, self.weight, self.bias)
-[rank3]:   File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/nn/modules/conv.py", line 543, in _conv_forward
-[rank3]:     return F.conv2d(
-[rank3]: RuntimeError: Input type (float) and bias type (c10::BFloat16) should be the same
-[ERROR] 2026-04-29-10:04:08 (PID:727738, Device:0, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-[ERROR] 2026-04-29-10:04:08 (PID:727745, Device:7, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-[ERROR] 2026-04-29-10:04:09 (PID:727744, Device:6, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-[ERROR] 2026-04-29-10:04:09 (PID:727740, Device:2, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-[ERROR] 2026-04-29-10:04:09 (PID:727742, Device:4, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-[ERROR] 2026-04-29-10:04:09 (PID:727741, Device:3, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-[ERROR] 2026-04-29-10:04:09 (PID:727739, Device:1, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-[ERROR] 2026-04-29-10:04:09 (PID:727743, Device:5, RankID:-1) ERR99999 UNKNOWN applicaiton exception
-W0429 10:04:12.668000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 727738 closing signal SIGTERM
-W0429 10:04:12.669000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 727739 closing signal SIGTERM
-W0429 10:04:12.671000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 727741 closing signal SIGTERM
-W0429 10:04:12.673000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 727742 closing signal SIGTERM
-W0429 10:04:12.676000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 727743 closing signal SIGTERM
-W0429 10:04:12.678000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 727744 closing signal SIGTERM
-W0429 10:04:12.681000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:908] Sending process 727745 closing signal SIGTERM
-E0429 10:04:13.515000 727571 site-packages/torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: 1) local_rank: 2 (pid: 727740) of binary: /root/anaconda3/envs/TADiSR/bin/python3.10
-Traceback (most recent call last):
-  File "/root/anaconda3/envs/TADiSR/bin/torchrun", line 7, in <module>
-    sys.exit(main())
-  File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
-    return f(*args, **kwargs)
-  File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/distributed/run.py", line 936, in main
-    run(args)
-  File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/distributed/run.py", line 927, in run
-    elastic_launch(
-  File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/distributed/launcher/api.py", line 156, in __call__
-    return launch_agent(self._config, self._entrypoint, list(args))
-  File "/root/anaconda3/envs/TADiSR/lib/python3.10/site-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
-    raise ChildFailedError(
-torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
-============================================================
-train.py FAILED
-------------------------------------------------------------
-Failures:
-  <NO_OTHER_FAILURES>
-------------------------------------------------------------
-Root Cause (first observed failure):
-[0]:
-  time      : 2026-04-29_10:04:12
-  host      : abad2b4994bf
-  rank      : 2 (local_rank: 2)
-  exitcode  : 1 (pid: 727740)
-  error_file: <N/A>
-  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
-============================================================
-[ERROR] 2026-04-29-10:04:13 (PID:727571, Device:-1, RankID:-1) ERR99999 UNKNOWN applicaiton exception
+...............[Step     10] Loss: 11.4069 (Img: 9.9948, Seg: 1.4121) LR: 5.00e-05
+[Step     20] Loss: 11.5596 (Img: 10.2487, Seg: 1.3109) LR: 5.00e-05
+[Step     30] Loss: 10.8002 (Img: 9.6340, Seg: 1.1662) LR: 5.00e-05
+[Step     40] Loss: 10.4636 (Img: 8.4291, Seg: 2.0345) LR: 5.00e-05
+[Step     50] Loss: 9.5738 (Img: 8.3861, Seg: 1.1877) LR: 5.00e-05
+[Step     60] Loss: 11.6005 (Img: 10.1624, Seg: 1.4381) LR: 5.00e-05
