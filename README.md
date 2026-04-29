@@ -462,7 +462,7 @@ use_kolors: true
 device: cuda
 dist_strategy: ddp
 batch_size: 1
-lr: 5e-5
+lr: 0.00005
 max_iters: 200000
 log_every: 100
 save_every: 5000

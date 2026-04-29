@@ -18,7 +18,7 @@ fail_on_lora_error: true
 require_precomputed_text_context: false
 lpips_resize: 512
 batch_size: 1
-lr: 5e-5
+lr: 0.00005
 grad_clip: 1.0
 warmup_iters: 0
 max_iters: 200000
@@ -27,3 +27,6 @@ log_every: 10
 save_every: 5000
 ckpt_dir: checkpoints
 tensorboard_log_dir: checkpoints/tensorboard
+tensorboard_image_every: 100
+tensorboard_image_max_samples: 1
+tensorboard_image_size: 256

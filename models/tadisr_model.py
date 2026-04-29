@@ -1057,7 +1057,7 @@ class TADiSRWrapper(nn.Module):
         z_noisy = torch.sqrt(alpha_bar_t) * z + torch.sqrt(1.0 - alpha_bar_t) * noise
         return z_noisy, noise
 
-    def forward(self, x_L, context=None, text_token_indices=None):
+    def forward(self, x_L, context=None, text_token_indices=None, return_debug: bool = False):
         """
         Training forward pass.
 
@@ -1067,10 +1067,13 @@ class TADiSRWrapper(nn.Module):
                      Ignored when use_real_backbone=True (model encodes
                      the fixed prompt internally via ChatGLM).
             text_token_indices: list[int], positions of "text" token
+            return_debug: if True, also return lightweight intermediate
+                          tensors for visualization.
 
         Returns:
             x_hr_pred:   predicted HR image [B, 3, H', W']
             s_mask_pred: predicted segmentation mask [B, 1, H', W']
+            debug:       optional dict containing "a_tex"
         """
         B = x_L.shape[0]
         device = x_L.device
@@ -1115,6 +1118,10 @@ class TADiSRWrapper(nn.Module):
         if self.use_real_backbone:
             x_hr_pred = self._denormalize_vae_output(x_hr_pred)
 
+        if return_debug:
+            return x_hr_pred, s_mask_pred, {
+                "a_tex": a_tex,
+            }
         return x_hr_pred, s_mask_pred
 
     def get_trainable_params(self):

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import torch
 import torch.optim as optim
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import MixedPrecision
@@ -41,6 +42,15 @@ from data.dataset import TADiSRDataset, tadisr_collate_fn
 
 class _NullSummaryWriter:
     def add_scalar(self, *args, **kwargs):
+        return None
+
+    def add_image(self, *args, **kwargs):
+        return None
+
+    def add_images(self, *args, **kwargs):
+        return None
+
+    def flush(self):
         return None
 
     def close(self):
@@ -85,6 +95,9 @@ def load_config(config_path):
     cfg.setdefault("taca_detach", False)
     cfg.setdefault("fail_on_lora_error", True)
     cfg.setdefault("require_precomputed_text_context", False)
+    cfg.setdefault("tensorboard_image_every", 100)
+    cfg.setdefault("tensorboard_image_max_samples", 1)
+    cfg.setdefault("tensorboard_image_size", 256)
 
     return SimpleNamespace(**cfg)
 
@@ -259,6 +272,184 @@ def _cuda_memory_stats(device):
         "reserved_mb": torch.cuda.memory_reserved(idx) / 1024 ** 2,
         "peak_mb": torch.cuda.max_memory_allocated(idx) / 1024 ** 2,
     }
+
+
+def _should_log_tensorboard_images(args, step: int) -> bool:
+    every = int(getattr(args, "tensorboard_image_every", 100) or 0)
+    if every <= 0:
+        return False
+    return step == 1 or step % every == 0
+
+
+def _tensorboard_image_size(args) -> int:
+    return max(1, int(getattr(args, "tensorboard_image_size", 256) or 256))
+
+
+def _tensorboard_image_max_samples(args, batch_size: int) -> int:
+    configured = int(getattr(args, "tensorboard_image_max_samples", 1) or 1)
+    return max(1, min(configured, batch_size))
+
+
+def _as_image_batch(tensor: torch.Tensor) -> torch.Tensor:
+    if tensor.ndim == 3:
+        tensor = tensor.unsqueeze(0)
+    if tensor.ndim != 4:
+        raise ValueError(f"Expected CHW or BCHW image tensor, got shape {tuple(tensor.shape)}")
+    return tensor.detach().float()
+
+
+def _resize_image_batch(batch: torch.Tensor, size: int) -> torch.Tensor:
+    if batch.shape[-2:] == (size, size):
+        return batch
+    return F.interpolate(batch, size=(size, size), mode="bilinear", align_corners=False)
+
+
+def _normalize_per_sample(batch: torch.Tensor) -> torch.Tensor:
+    flat = batch.flatten(start_dim=1)
+    min_v = flat.amin(dim=1).view(-1, 1, 1, 1)
+    max_v = flat.amax(dim=1).view(-1, 1, 1, 1)
+    return (batch - min_v) / (max_v - min_v).clamp_min(1e-6)
+
+
+def _to_rgb(batch: torch.Tensor) -> torch.Tensor:
+    if batch.shape[1] == 3:
+        return batch
+    if batch.shape[1] == 1:
+        return batch.repeat(1, 3, 1, 1)
+    if batch.shape[1] > 3:
+        return batch[:, :3]
+    raise ValueError(f"Cannot convert {batch.shape[1]} channels to RGB")
+
+
+def _heatmap_to_rgb(heatmap: torch.Tensor) -> torch.Tensor:
+    heatmap = heatmap.clamp(0.0, 1.0)
+    red = (1.5 * heatmap).clamp(0.0, 1.0)
+    green = (1.5 - (2.0 * heatmap - 1.0).abs() * 1.5).clamp(0.0, 1.0)
+    blue = (1.5 * (1.0 - heatmap)).clamp(0.0, 1.0)
+    return torch.cat([red, green, blue], dim=1)
+
+
+def _prepare_display_batch(
+    tensor: torch.Tensor,
+    size: int,
+    max_samples: int,
+    *,
+    normalize: bool = False,
+    rgb: bool = True,
+) -> torch.Tensor:
+    batch = _as_image_batch(tensor)[:max_samples]
+    batch = _normalize_per_sample(batch) if normalize else batch.clamp(0.0, 1.0)
+    batch = _resize_image_batch(batch, size)
+    if rgb:
+        batch = _to_rgb(batch)
+    return batch.cpu()
+
+
+def _prepare_taca_heatmap(
+    a_tex: torch.Tensor,
+    size: int,
+    max_samples: int,
+) -> torch.Tensor:
+    heatmap = _as_image_batch(a_tex)[:max_samples].abs().mean(dim=1, keepdim=True)
+    heatmap = _normalize_per_sample(heatmap)
+    heatmap = _resize_image_batch(heatmap, size)
+    return _heatmap_to_rgb(heatmap).cpu()
+
+
+def _make_image_grid(batch: torch.Tensor, nrow=None, padding: int = 2) -> torch.Tensor:
+    if batch.ndim == 3:
+        return batch
+    if batch.ndim != 4:
+        raise ValueError(f"Expected BCHW tensor for image grid, got shape {tuple(batch.shape)}")
+
+    batch_size, channels, height, width = batch.shape
+    if batch_size == 1:
+        return batch[0]
+
+    nrow = min(batch_size, int(nrow or batch_size))
+    ncol = (batch_size + nrow - 1) // nrow
+    grid_h = ncol * height + (ncol - 1) * padding
+    grid_w = nrow * width + (nrow - 1) * padding
+    grid = batch.new_full((channels, grid_h, grid_w), 1.0)
+
+    for idx in range(batch_size):
+        row = idx // nrow
+        col = idx % nrow
+        top = row * (height + padding)
+        left = col * (width + padding)
+        grid[:, top:top + height, left:left + width] = batch[idx]
+    return grid
+
+
+def _make_overview_grid(panels, padding: int = 2) -> torch.Tensor:
+    if not panels:
+        raise ValueError("At least one image panel is required")
+
+    batch_size = panels[0].shape[0]
+    _, channels, height, _ = panels[0].shape
+    rows = []
+    for sample_idx in range(batch_size):
+        row_parts = []
+        for panel_idx, panel in enumerate(panels):
+            if panel_idx > 0:
+                row_parts.append(panel.new_full((channels, height, padding), 1.0))
+            row_parts.append(panel[sample_idx])
+        rows.append(torch.cat(row_parts, dim=2))
+
+    if len(rows) == 1:
+        return rows[0]
+
+    row_width = rows[0].shape[-1]
+    stacked = []
+    for row_idx, row in enumerate(rows):
+        if row_idx > 0:
+            stacked.append(row.new_full((channels, padding, row_width), 1.0))
+        stacked.append(row)
+    return torch.cat(stacked, dim=1)
+
+
+def _add_tensorboard_image(tb_writer, tag: str, batch: torch.Tensor, step: int):
+    tb_writer.add_image(tag, _make_image_grid(batch), step, dataformats="CHW")
+
+
+def _log_tensorboard_images(
+    tb_writer,
+    args,
+    step: int,
+    lr_img: torch.Tensor,
+    hr_img: torch.Tensor,
+    x_pred: torch.Tensor,
+    s_pred: torch.Tensor,
+    mask: torch.Tensor,
+    debug,
+):
+    size = _tensorboard_image_size(args)
+    max_samples = _tensorboard_image_max_samples(args, lr_img.shape[0])
+
+    lr_vis = _prepare_display_batch(lr_img, size, max_samples)
+    hr_vis = _prepare_display_batch(hr_img, size, max_samples)
+    pred_vis = _prepare_display_batch(x_pred, size, max_samples)
+    pred_mask_vis = _prepare_display_batch(s_pred, size, max_samples)
+    mask_vis = _prepare_display_batch(mask, size, max_samples)
+
+    _add_tensorboard_image(tb_writer, "images/lr_upsampled", lr_vis, step)
+    _add_tensorboard_image(tb_writer, "images/hr_gt", hr_vis, step)
+    _add_tensorboard_image(tb_writer, "images/jsd_pred_hr", pred_vis, step)
+    _add_tensorboard_image(tb_writer, "images/jsd_pred_mask", pred_mask_vis, step)
+    _add_tensorboard_image(tb_writer, "images/mask_gt", mask_vis, step)
+
+    overview_panels = [lr_vis, hr_vis, pred_vis, pred_mask_vis, mask_vis]
+    if debug is not None and debug.get("a_tex") is not None:
+        taca_vis = _prepare_taca_heatmap(debug["a_tex"], size, max_samples)
+        _add_tensorboard_image(tb_writer, "images/taca_attention", taca_vis, step)
+        overview_panels.append(taca_vis)
+
+    tb_writer.add_image(
+        "images/overview_grid",
+        _make_overview_grid(overview_panels),
+        step,
+        dataformats="CHW",
+    )
 
 
 def create_datasets(args):
@@ -513,14 +704,20 @@ def train(args):
             mask = batch["mask"].to(device)
             context = batch["context"].to(device)
             text_indices = batch["text_indices"][0]
+            log_tb_images = is_main and _should_log_tensorboard_images(args, global_step + 1)
 
             optimizer.zero_grad(set_to_none=True)
 
             with _autocast_context(device, precision_name, precision_dtype):
                 # Forward — Paper loss: ℓ_tot = ℓ_img + ℓ_seg (NO noise loss)
-                x_pred, s_pred = model.forward(
-                    lr_img, context, text_indices
+                model_out = model.forward(
+                    lr_img, context, text_indices, return_debug=log_tb_images
                 )
+                if log_tb_images:
+                    x_pred, s_pred, debug = model_out
+                else:
+                    x_pred, s_pred = model_out
+                    debug = None
 
                 # Calculate composite loss
                 loss, loss_img, loss_seg = criterion(
@@ -561,6 +758,19 @@ def train(args):
                 scheduler.step()
 
             global_step += 1
+
+            if log_tb_images:
+                _log_tensorboard_images(
+                    tb_writer,
+                    args,
+                    global_step,
+                    lr_img,
+                    hr_img,
+                    x_pred,
+                    s_pred,
+                    mask,
+                    debug,
+                )
 
             if is_main and global_step % args.log_every == 0:
                 current_lr = optimizer.param_groups[0]['lr']

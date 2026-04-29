@@ -1,6 +1,7 @@
 # Core deep learning
 torch==2.9.0
 torchvision>=0.16.0
+tensorboard>=2.14.0
 
 # Diffusion model backbone (Kolors)
 

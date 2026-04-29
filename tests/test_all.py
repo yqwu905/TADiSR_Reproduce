@@ -378,6 +378,90 @@ def test_full_model_forward():
     print()
 
 
+def test_tensorboard_visual_debug_helpers():
+    """Test optional forward debug output and TensorBoard image preparation."""
+    print("=" * 60)
+    print("TEST: TensorBoard Visual Debug Helpers")
+    print("=" * 60)
+
+    from types import SimpleNamespace
+    from models.tadisr_model import TADiSRWrapper
+    from train import _NullSummaryWriter, _log_tensorboard_images, _prepare_taca_heatmap
+
+    class CapturingWriter(_NullSummaryWriter):
+        def __init__(self):
+            self.image_tags = []
+
+        def add_image(self, tag, img_tensor, global_step=None, *args, **kwargs):
+            self.image_tags.append(tag)
+            assert img_tensor.ndim == 3, f"{tag} should be CHW"
+            assert torch.isfinite(img_tensor).all(), f"{tag} contains non-finite values"
+            assert img_tensor.min() >= 0.0 and img_tensor.max() <= 1.0, \
+                f"{tag} should be normalized to [0,1]"
+
+    model = TADiSRWrapper(
+        use_kolors=False,
+        context_dim=128,
+        jsd_dim=16,
+        lora_rank=2,
+    )
+    x_L = torch.rand(1, 3, 32, 32)
+    x_H = torch.rand(1, 3, 128, 128)
+    mask = torch.rand(1, 1, 128, 128)
+    context = torch.randn(1, 77, 128)
+
+    default_out = model.forward(x_L, context, [5])
+    assert len(default_out) == 2, "Default forward should remain backward-compatible"
+
+    x_pred, s_pred, debug = model.forward(x_L, context, [5], return_debug=True)
+    assert isinstance(debug, dict), "Debug output should be a dict"
+    assert "a_tex" in debug, "Debug output should expose TACA a_tex"
+    assert debug["a_tex"].ndim == 4, f"a_tex should be BCHW, got {debug['a_tex'].shape}"
+    assert debug["a_tex"].shape[0] == x_L.shape[0], "a_tex batch dim should match input"
+    assert torch.isfinite(debug["a_tex"]).all(), "a_tex should not contain NaN/Inf"
+
+    taca_vis = _prepare_taca_heatmap(debug["a_tex"], size=32, max_samples=1)
+    assert taca_vis.shape == (1, 3, 32, 32), f"Unexpected heatmap shape: {taca_vis.shape}"
+    assert torch.isfinite(taca_vis).all(), "TACA heatmap should not contain NaN/Inf"
+
+    writer = CapturingWriter()
+    args = SimpleNamespace(tensorboard_image_size=32, tensorboard_image_max_samples=1)
+    _log_tensorboard_images(
+        writer,
+        args,
+        1,
+        x_L,
+        x_H,
+        x_pred,
+        s_pred,
+        mask,
+        debug,
+    )
+
+    expected_tags = {
+        "images/lr_upsampled",
+        "images/hr_gt",
+        "images/jsd_pred_hr",
+        "images/jsd_pred_mask",
+        "images/mask_gt",
+        "images/taca_attention",
+        "images/overview_grid",
+    }
+    assert expected_tags.issubset(set(writer.image_tags)), writer.image_tags
+
+    null_writer = _NullSummaryWriter()
+    null_writer.add_image("noop/image", taca_vis[0], 1)
+    null_writer.add_images("noop/images", taca_vis, 1)
+    null_writer.flush()
+    null_writer.close()
+
+    print("  ✓ forward() default return remains 2 values")
+    print("  ✓ forward(return_debug=True) exposes finite TACA a_tex")
+    print("  ✓ TACA heatmap and TensorBoard image tags are generated")
+    print("  ✓ _NullSummaryWriter supports image APIs")
+    print()
+
+
 def test_training_loop():
     """Test full training loop (Paper Section 4.1)."""
     print("=" * 60)
@@ -909,6 +993,7 @@ def run_all_tests():
         ("VAE Normalization Helpers", test_vae_normalization_helpers),
         ("Real VAE Encode Dtype Cast", test_real_vae_encode_casts_to_vae_dtype),
         ("Full Model Forward", test_full_model_forward),
+        ("TensorBoard Visual Debug Helpers", test_tensorboard_visual_debug_helpers),
         ("Training Loop", test_training_loop),
         ("Checkpoint Save (Fix T2)", test_checkpoint_save),
         ("Degradation Pipeline", test_degradation_pipeline),

@@ -18,7 +18,7 @@ taca_detach: false
 fail_on_lora_error: true
 lpips_resize: 512
 batch_size: 1
-lr: 5e-5
+lr: 0.00005
 grad_clip: 1.0
 warmup_iters: 0
 max_iters: 200000
