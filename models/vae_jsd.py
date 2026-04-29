@@ -56,8 +56,42 @@ class LoRAConv2d(nn.Module):
         nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B.weight)
 
+    @staticmethod
+    def _single_or_pair(value):
+        if isinstance(value, tuple) and len(value) == 2 and value[0] == value[1]:
+            return value[0]
+        return value
+
+    @staticmethod
+    def _conv2d(module: nn.Conv2d, x: torch.Tensor) -> torch.Tensor:
+        """Run Conv2d while tolerating FSDP-exposed flattened param views."""
+        weight = module.weight
+        expected_weight_shape = (
+            module.out_channels,
+            module.in_channels // module.groups,
+            *module.kernel_size,
+        )
+        if tuple(weight.shape) != expected_weight_shape:
+            weight = weight.view(expected_weight_shape)
+
+        bias = module.bias
+        if bias is not None and tuple(bias.shape) != (module.out_channels,):
+            bias = bias.view(module.out_channels)
+
+        return F.conv2d(
+            x,
+            weight,
+            bias,
+            stride=LoRAConv2d._single_or_pair(module.stride),
+            padding=LoRAConv2d._single_or_pair(module.padding),
+            dilation=LoRAConv2d._single_or_pair(module.dilation),
+            groups=module.groups,
+        )
+
     def forward(self, x):
-        return self.base(x) + self.lora_B(self.lora_A(x)) * self.scale
+        base = self._conv2d(self.base, x)
+        lora = self._conv2d(self.lora_B, self._conv2d(self.lora_A, x))
+        return base + lora * self.scale
 
 
 # ---------------------------------------------------------------------------

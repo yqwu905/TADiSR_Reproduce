@@ -731,6 +731,39 @@ def test_jsd_dim_controls_channels():
     print()
 
 
+def test_lora_conv2d_flattened_param_views():
+    """LoRAConv2d should tolerate FSDP-style flattened original-param views."""
+    print("=" * 60)
+    print("TEST: LoRAConv2d Flattened Param Views")
+    print("=" * 60)
+
+    import torch.nn as nn
+    from models.vae_jsd import LoRAConv2d
+
+    layer = LoRAConv2d(nn.Conv2d(4, 8, 3, padding=1), rank=2)
+    x = torch.randn(1, 4, 8, 8)
+    reference = layer(x)
+
+    for conv in (layer.base, layer.lora_A, layer.lora_B):
+        conv.weight = nn.Parameter(
+            conv.weight.detach().reshape(-1),
+            requires_grad=conv.weight.requires_grad,
+        )
+        if conv.bias is not None:
+            conv.bias = nn.Parameter(
+                conv.bias.detach().reshape(-1),
+                requires_grad=conv.bias.requires_grad,
+            )
+
+    out = layer(x)
+    assert out.shape == reference.shape, f"Unexpected output shape: {out.shape}"
+    assert torch.allclose(out, reference), "Flattened views should preserve output values"
+
+    print("  ✓ LoRAConv2d forward handles flattened weight/bias parameter views")
+    print("  ✓ Flattened views preserve output values")
+    print()
+
+
 def test_diffusers_taca_integration():
     """Verify TACA installs correctly on a real diffusers UNet."""
     print("=" * 60)
@@ -832,6 +865,7 @@ def run_all_tests():
         ("Chunked TACA Attention Equivalence", test_taca_chunked_attention_equivalence_and_grad),
         ("LoRA Failure Is Fatal", test_lora_failure_is_fatal),
         ("jsd_dim Controls JSD Width", test_jsd_dim_controls_channels),
+        ("LoRAConv2d Flattened Param Views", test_lora_conv2d_flattened_param_views),
         ("Diffusers TACA Integration", test_diffusers_taca_integration),
         ("VAE Normalization Helpers", test_vae_normalization_helpers),
         ("Full Model Forward", test_full_model_forward),

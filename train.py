@@ -74,6 +74,8 @@ def load_config(config_path):
     # Distributed strategy: ddp | fsdp (used when WORLD_SIZE > 1)
     cfg.setdefault("dist_strategy", "ddp")
     cfg.setdefault("precision", "bf16")
+    if "gradient_checkpointing" not in cfg and "use_gradient_checkpointing" in cfg:
+        cfg["gradient_checkpointing"] = cfg["use_gradient_checkpointing"]
     cfg.setdefault("gradient_checkpointing", True)
     cfg.setdefault("fsdp_auto_wrap", True)
     cfg.setdefault("fsdp_activation_checkpointing", True)
@@ -183,6 +185,7 @@ def _build_fsdp_mixed_precision(precision_name, dtype):
         param_dtype=dtype,
         reduce_dtype=dtype,
         buffer_dtype=dtype,
+        cast_forward_inputs=True,
     )
 
 
