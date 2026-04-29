@@ -456,6 +456,7 @@ def train(args):
                     "FSDP requires accelerator device in this project "
                     f"(cuda/npu), got device={device.type}."
                 )
+            model = model.to(precision_dtype)
             model = FSDP(
                 model,
                 device_id=fsdp_device_id,
