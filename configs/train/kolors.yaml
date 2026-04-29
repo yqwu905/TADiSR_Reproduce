@@ -17,3 +17,4 @@ save_every: 5000
 ckpt_dir: checkpoints
 tensorboard_log_dir: checkpoints/tensorboard
 precomputed_text_context_path: embedding.pt
+use_gradient_checkpointing: false  # Trade compute for memory on UNet + JSD
