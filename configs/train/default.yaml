@@ -26,6 +26,7 @@ epochs: 9999
 log_every: 10
 save_every: 5000
 ckpt_dir: checkpoints
+resume_from: null  # e.g. checkpoints/tadisr_step5000.pt
 tensorboard_log_dir: checkpoints/tensorboard
 tensorboard_image_every: 100
 tensorboard_image_max_samples: 1

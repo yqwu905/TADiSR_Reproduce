@@ -589,9 +589,16 @@ Checkpoint 内容：
 
 ```python
 {
+    'checkpoint_version': 2,
     'step': global_step,
+    'epoch': epoch,
+    'next_batch_idx': next_batch_idx,
     'model_state_dict': {...},    # 仅 LoRA + JSD + TACA 参数
     'optimizer_state_dict': {...},
+    'scheduler_state_dict': {...},
+    'scaler_state_dict': {...},
+    'rng_state': {...},           # Python / NumPy / Torch RNG
+    'training_config': {...},
     'loss': loss_value,
 }
 ```
@@ -769,14 +776,27 @@ torchrun --nproc_per_node=8 train.py --use_kolors --ftsr_dir dataset/FTSR --devi
 
 ### Q7: 如何恢复训练？
 
-当前版本需手动加载 checkpoint：
+在训练 YAML 中显式指定 checkpoint 路径：
 
-```python
-ckpt = torch.load('checkpoints/tadisr_step5000.pt')
-model.load_state_dict(ckpt['model_state_dict'], strict=False)
-optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-start_step = ckpt['step']
+```yaml
+resume_from: checkpoints/tadisr_step5000.pt
 ```
+
+然后正常启动训练：
+
+```bash
+python train.py --config configs/train/default.yaml
+```
+
+也可以用命令行临时覆盖 YAML：
+
+```bash
+python train.py \
+  --config configs/train/default.yaml \
+  --resume-from checkpoints/tadisr_step5000.pt
+```
+
+恢复会加载模型可训练参数、optimizer、scheduler、GradScaler、RNG 状态，并从 checkpoint 记录的 step/epoch/batch 继续。当前仅支持单卡和 DDP；FSDP checkpoint 恢复尚未实现。
 
 ---
 

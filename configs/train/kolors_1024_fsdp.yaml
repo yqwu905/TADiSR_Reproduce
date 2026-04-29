@@ -26,4 +26,5 @@ epochs: 9999
 log_every: 10
 save_every: 5000
 ckpt_dir: checkpoints/kolors_1024_fsdp
+resume_from: null  # FSDP resume is not implemented yet
 tensorboard_log_dir: checkpoints/tensorboard/kolors_1024_fsdp

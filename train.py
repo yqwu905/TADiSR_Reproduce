@@ -13,8 +13,10 @@ Paper reference (Section 4.1):
 import os
 import yaml
 import argparse
+import random
 from contextlib import nullcontext
 from types import SimpleNamespace
+import numpy as np
 import torch
 import torch.optim as optim
 import torch.distributed as dist
@@ -38,6 +40,26 @@ from models.tadisr_model import TADiSRWrapper
 from models.vae_jsd import CDIB, DecoderBranch, JointSegmentationDecoders, UNetMidBlock2D, UpDecoderBlock2D
 from losses.composite_loss import CompositeTADiSRLoss
 from data.dataset import TADiSRDataset, tadisr_collate_fn
+
+
+CHECKPOINT_VERSION = 2
+CHECKPOINT_CONFIG_KEYS = (
+    "use_kolors",
+    "context_dim",
+    "jsd_dim",
+    "lora_rank",
+    "device",
+    "dist_strategy",
+    "precision",
+    "batch_size",
+    "lr",
+    "grad_clip",
+    "warmup_iters",
+    "max_iters",
+    "epochs",
+    "save_every",
+    "ckpt_dir",
+)
 
 
 class _NullSummaryWriter:
@@ -98,6 +120,7 @@ def load_config(config_path):
     cfg.setdefault("tensorboard_image_every", 100)
     cfg.setdefault("tensorboard_image_max_samples", 1)
     cfg.setdefault("tensorboard_image_size", 256)
+    cfg.setdefault("resume_from", None)
 
     return SimpleNamespace(**cfg)
 
@@ -452,6 +475,218 @@ def _log_tensorboard_images(
     )
 
 
+def _checkpoint_config_summary(args):
+    return {key: getattr(args, key, None) for key in CHECKPOINT_CONFIG_KEYS}
+
+
+def _checkpoint_trainable_state_dict(raw_model, trainable_params):
+    """Return the lightweight checkpoint payload for LoRA/JSD/TACA training."""
+    trainable_ids = {id(p) for p in trainable_params}
+    save_keys = set()
+    for name, param in raw_model.named_parameters():
+        if id(param) in trainable_ids:
+            save_keys.add(name)
+        elif "jsd" in name or "taca" in name:
+            save_keys.add(name)
+
+    model_sd = raw_model.state_dict()
+    return {k: v for k, v in model_sd.items() if k in save_keys}
+
+
+def _capture_rng_state(device):
+    rng_state = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        rng_state["cuda"] = torch.cuda.get_rng_state_all()
+    if device.type == "npu" and hasattr(torch, "npu"):
+        get_rng_state_all = getattr(torch.npu, "get_rng_state_all", None)
+        if callable(get_rng_state_all):
+            rng_state["npu"] = get_rng_state_all()
+    return rng_state
+
+
+def _restore_rng_state(rng_state, device, *, is_main=True):
+    if not rng_state:
+        if is_main:
+            print("  Resume warning: checkpoint has no RNG state; continuing best-effort.")
+        return
+
+    try:
+        if "python" in rng_state:
+            random.setstate(rng_state["python"])
+        if "numpy" in rng_state:
+            np.random.set_state(rng_state["numpy"])
+        if "torch" in rng_state:
+            torch.set_rng_state(rng_state["torch"])
+        if "cuda" in rng_state and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(rng_state["cuda"])
+        if "npu" in rng_state and device.type == "npu" and hasattr(torch, "npu"):
+            set_rng_state_all = getattr(torch.npu, "set_rng_state_all", None)
+            if callable(set_rng_state_all):
+                set_rng_state_all(rng_state["npu"])
+    except Exception as exc:
+        if is_main:
+            print(f"  Resume warning: failed to restore RNG state ({exc}); continuing best-effort.")
+
+
+def _build_training_checkpoint(
+    raw_model,
+    trainable_params,
+    optimizer,
+    scheduler,
+    scaler,
+    args,
+    *,
+    global_step,
+    epoch,
+    next_batch_idx,
+    loss_value,
+    device,
+):
+    return {
+        "checkpoint_version": CHECKPOINT_VERSION,
+        "step": int(global_step),
+        "epoch": int(epoch),
+        "next_batch_idx": int(next_batch_idx),
+        "model_state_dict": _checkpoint_trainable_state_dict(raw_model, trainable_params),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+        "scaler_state_dict": scaler.state_dict() if scaler is not None else None,
+        "rng_state": _capture_rng_state(device),
+        "training_config": _checkpoint_config_summary(args),
+        "loss": float(loss_value),
+    }
+
+
+def _infer_resume_position(checkpoint, steps_per_epoch, *, is_main=True):
+    global_step = int(checkpoint.get("step", 0) or 0)
+    has_position = "epoch" in checkpoint and "next_batch_idx" in checkpoint
+    if has_position:
+        return global_step, int(checkpoint["epoch"]), int(checkpoint["next_batch_idx"])
+
+    if steps_per_epoch and steps_per_epoch > 0:
+        start_epoch = global_step // steps_per_epoch
+        start_batch_idx = global_step % steps_per_epoch
+    else:
+        start_epoch = 0
+        start_batch_idx = 0
+
+    if is_main:
+        print(
+            "  Resume warning: checkpoint has no epoch/next_batch_idx; "
+            f"inferred epoch={start_epoch}, batch={start_batch_idx} from step={global_step}."
+        )
+    return global_step, start_epoch, start_batch_idx
+
+
+def load_training_checkpoint(
+    ckpt_path,
+    raw_model,
+    optimizer,
+    scheduler,
+    scaler,
+    device,
+    *,
+    steps_per_epoch=None,
+    is_main=True,
+):
+    if not ckpt_path:
+        return {"global_step": 0, "start_epoch": 0, "start_batch_idx": 0}
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(f"Resume checkpoint not found: {ckpt_path}")
+
+    try:
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+    model_state = checkpoint.get("model_state_dict")
+    if not isinstance(model_state, dict):
+        raise ValueError(f"Invalid checkpoint: missing model_state_dict in {ckpt_path}")
+
+    load_result = raw_model.load_state_dict(model_state, strict=False)
+    if "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    elif is_main:
+        print("  Resume warning: checkpoint has no optimizer_state_dict.")
+
+    scheduler_state = checkpoint.get("scheduler_state_dict")
+    if scheduler is not None and scheduler_state is not None:
+        scheduler.load_state_dict(scheduler_state)
+    elif scheduler is not None and is_main:
+        print("  Resume warning: checkpoint has no scheduler_state_dict.")
+
+    scaler_state = checkpoint.get("scaler_state_dict")
+    if scaler is not None and scaler_state is not None:
+        scaler.load_state_dict(scaler_state)
+    elif scaler is not None and scaler.is_enabled() and is_main:
+        print("  Resume warning: checkpoint has no scaler_state_dict.")
+
+    _restore_rng_state(checkpoint.get("rng_state"), device, is_main=is_main)
+    global_step, start_epoch, start_batch_idx = _infer_resume_position(
+        checkpoint,
+        steps_per_epoch,
+        is_main=is_main,
+    )
+
+    if is_main:
+        version = checkpoint.get("checkpoint_version", "legacy")
+        print(
+            f"  Resumed checkpoint v{version} from {ckpt_path}: "
+            f"step={global_step}, epoch={start_epoch}, next_batch_idx={start_batch_idx}"
+        )
+        if load_result.missing_keys:
+            print(
+                f"  Resume note: {len(load_result.missing_keys)} missing model keys "
+                "(expected for lightweight ckpts)."
+            )
+        if load_result.unexpected_keys:
+            print(f"  Resume note: {len(load_result.unexpected_keys)} unexpected model keys.")
+
+    return {
+        "global_step": global_step,
+        "start_epoch": start_epoch,
+        "start_batch_idx": start_batch_idx,
+        "missing_keys": load_result.missing_keys,
+        "unexpected_keys": load_result.unexpected_keys,
+    }
+
+
+def save_training_checkpoint(
+    ckpt_path,
+    raw_model,
+    trainable_params,
+    optimizer,
+    scheduler,
+    scaler,
+    args,
+    *,
+    global_step,
+    epoch,
+    next_batch_idx,
+    loss_value,
+    device,
+):
+    os.makedirs(os.path.dirname(ckpt_path) or ".", exist_ok=True)
+    checkpoint = _build_training_checkpoint(
+        raw_model,
+        trainable_params,
+        optimizer,
+        scheduler,
+        scaler,
+        args,
+        global_step=global_step,
+        epoch=epoch,
+        next_batch_idx=next_batch_idx,
+        loss_value=loss_value,
+        device=device,
+    )
+    torch.save(checkpoint, ckpt_path)
+    return len(checkpoint["model_state_dict"])
+
+
 def create_datasets(args):
     """Create training datasets: FTSR + optionally Real-CE."""
     datasets = []
@@ -543,13 +778,19 @@ def cleanup_distributed(ddp_state):
 
 
 def train(args):
+    dist_strategy = str(getattr(args, "dist_strategy", "ddp")).lower()
+    if dist_strategy not in {"ddp", "fsdp"}:
+        raise ValueError(f"Unsupported dist_strategy: {dist_strategy}. Use 'ddp' or 'fsdp'.")
+    resume_from = getattr(args, "resume_from", None)
+    if resume_from and dist_strategy == "fsdp":
+        raise NotImplementedError(
+            "Checkpoint resume currently supports single-process/DDP only; "
+            "FSDP resume needs a full-state-dict checkpoint path and is not implemented yet."
+        )
     ddp_state = setup_distributed(args)
     is_main = ddp_state["rank"] == 0
     device = ddp_state["device"]
-    dist_strategy = str(getattr(args, "dist_strategy", "ddp")).lower()
     precision_name, precision_dtype = _resolve_precision_dtype(getattr(args, "precision", "bf16"))
-    if dist_strategy not in {"ddp", "fsdp"}:
-        raise ValueError(f"Unsupported dist_strategy: {dist_strategy}. Use 'ddp' or 'fsdp'.")
 
     if is_main:
         print(f"Starting TADiSR training on {device}...")
@@ -685,17 +926,36 @@ def train(args):
         lpips_resize=getattr(args, "lpips_resize", 0),
     ).to(device)
 
+    resume_state = {"global_step": 0, "start_epoch": 0, "start_batch_idx": 0}
+    if resume_from:
+        resume_state = load_training_checkpoint(
+            resume_from,
+            raw_model,
+            optimizer,
+            scheduler,
+            scaler,
+            device,
+            steps_per_epoch=len(loader),
+            is_main=is_main,
+        )
+        if ddp_state["distributed"]:
+            dist.barrier()
+
     # 6. Training Loop
     model.train()
-    global_step = 0
+    global_step = resume_state["global_step"]
+    start_epoch = resume_state["start_epoch"]
+    start_batch_idx = resume_state["start_batch_idx"]
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
 
-    for ep in range(args.epochs):
+    for ep in range(start_epoch, args.epochs):
         if sampler is not None:
             sampler.set_epoch(ep)
 
         for step, batch in enumerate(loader):
+            if ep == start_epoch and step < start_batch_idx:
+                continue
             if global_step >= args.max_iters:
                 break
 
@@ -801,25 +1061,21 @@ def train(args):
             # Save checkpoint
             if is_main and args.save_every > 0 and global_step % args.save_every == 0:
                 ckpt_path = os.path.join(args.ckpt_dir, f"tadisr_step{global_step}.pt")
-                os.makedirs(args.ckpt_dir, exist_ok=True)
-                # Fix T2: Filter by parameter name, not by requires_grad on
-                # detached state_dict tensors (which is always False)
-                trainable_names = {id(p) for p in trainable_params}
-                save_keys = set()
-                for name, param in raw_model.named_parameters():
-                    if id(param) in trainable_names:
-                        save_keys.add(name)
-                    elif 'jsd' in name or 'taca' in name:
-                        save_keys.add(name)
-                model_sd = raw_model.state_dict()
-                save_sd = {k: v for k, v in model_sd.items() if k in save_keys}
-                torch.save({
-                    'step': global_step,
-                    'model_state_dict': save_sd,
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss.item(),
-                }, ckpt_path)
-                print(f"  Checkpoint saved to {ckpt_path} ({len(save_sd)} tensors)")
+                saved_tensors = save_training_checkpoint(
+                    ckpt_path,
+                    raw_model,
+                    trainable_params,
+                    optimizer,
+                    scheduler,
+                    scaler,
+                    args,
+                    global_step=global_step,
+                    epoch=ep,
+                    next_batch_idx=step + 1,
+                    loss_value=loss.item(),
+                    device=device,
+                )
+                print(f"  Checkpoint saved to {ckpt_path} ({saved_tensors} tensors)")
 
         if global_step >= args.max_iters:
             break
@@ -844,7 +1100,15 @@ if __name__ == "__main__":
         default="configs/train/default.yaml",
         help="Path to training config YAML file",
     )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Optional checkpoint path that overrides resume_from in the config.",
+    )
 
     cli_args = parser.parse_args()
     args = load_config(cli_args.config)
+    if cli_args.resume_from is not None:
+        args.resume_from = cli_args.resume_from
     train(args)

@@ -17,6 +17,7 @@ Tests verify:
 """
 import sys
 import os
+import tempfile
 import torch
 import numpy as np
 
@@ -521,21 +522,14 @@ def test_checkpoint_save():
     print("=" * 60)
 
     from models.tadisr_model import TADiSRWrapper
+    from train import _checkpoint_trainable_state_dict
 
     model = TADiSRWrapper(use_kolors=False, context_dim=4096)
     trainable_params = model.get_trainable_params()
 
     # Fix T2: Verify that parameter filtering by name works correctly
-    trainable_ids = {id(p) for p in trainable_params}
-    save_keys = set()
-    for name, param in model.named_parameters():
-        if id(param) in trainable_ids:
-            save_keys.add(name)
-        elif 'jsd' in name or 'taca' in name:
-            save_keys.add(name)
-
     model_sd = model.state_dict()
-    save_sd = {k: v for k, v in model_sd.items() if k in save_keys}
+    save_sd = _checkpoint_trainable_state_dict(model, trainable_params)
 
     assert len(save_sd) > 0, "Should save at least some parameters"
 
@@ -552,6 +546,185 @@ def test_checkpoint_save():
     print(f"  ✓ Name-based filtering: {len(save_sd)} tensors saved")
     print(f"  ✓ JSD params included: {len(jsd_keys)} tensors")
     print(f"  ✓ Old broken approach would save 0 tensors (confirmed bug)")
+    print()
+
+
+def _make_checkpoint_test_args(ckpt_dir):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        use_kolors=False,
+        context_dim=128,
+        jsd_dim=16,
+        lora_rank=2,
+        device="cpu",
+        dist_strategy="ddp",
+        precision="fp32",
+        batch_size=1,
+        lr=5e-5,
+        grad_clip=1.0,
+        warmup_iters=2,
+        max_iters=10,
+        epochs=3,
+        save_every=1,
+        ckpt_dir=ckpt_dir,
+    )
+
+
+def _make_checkpoint_test_model():
+    from models.tadisr_model import TADiSRWrapper
+
+    return TADiSRWrapper(
+        use_kolors=False,
+        context_dim=128,
+        jsd_dim=16,
+        lora_rank=2,
+    )
+
+
+def _prime_optimizer_state(optimizer, params):
+    for param in params:
+        param.grad = torch.ones_like(param)
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+
+
+def test_checkpoint_resume_roundtrip():
+    """Test checkpoint v2 save/load restores training state."""
+    print("=" * 60)
+    print("TEST: Checkpoint Resume Roundtrip")
+    print("=" * 60)
+
+    from train import (
+        CHECKPOINT_VERSION,
+        load_training_checkpoint,
+        save_training_checkpoint,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        args = _make_checkpoint_test_args(tmpdir)
+        model = _make_checkpoint_test_model()
+        trainable_params = model.get_trainable_params()
+        optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lambda step: step / max(args.warmup_iters, 1) if step < args.warmup_iters else 1.0,
+        )
+        scaler = torch.amp.GradScaler("cuda", enabled=False)
+
+        _prime_optimizer_state(optimizer, trainable_params)
+        scheduler.step()
+
+        ckpt_path = os.path.join(tmpdir, "tadisr_step7.pt")
+        saved_tensors = save_training_checkpoint(
+            ckpt_path,
+            model,
+            trainable_params,
+            optimizer,
+            scheduler,
+            scaler,
+            args,
+            global_step=7,
+            epoch=1,
+            next_batch_idx=3,
+            loss_value=1.25,
+            device=torch.device("cpu"),
+        )
+        assert saved_tensors > 0, "Checkpoint should contain model tensors"
+
+        try:
+            checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(ckpt_path, map_location="cpu")
+        assert checkpoint["checkpoint_version"] == CHECKPOINT_VERSION
+        assert checkpoint["scheduler_state_dict"] is not None
+        assert checkpoint["scaler_state_dict"] is not None
+        assert checkpoint["rng_state"] is not None
+        assert checkpoint["training_config"]["context_dim"] == args.context_dim
+
+        resumed_model = _make_checkpoint_test_model()
+        resumed_params = resumed_model.get_trainable_params()
+        resumed_optimizer = torch.optim.AdamW(resumed_params, lr=args.lr, weight_decay=0.01)
+        resumed_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            resumed_optimizer,
+            lambda step: step / max(args.warmup_iters, 1) if step < args.warmup_iters else 1.0,
+        )
+        resumed_scaler = torch.amp.GradScaler("cuda", enabled=False)
+
+        resume_state = load_training_checkpoint(
+            ckpt_path,
+            resumed_model,
+            resumed_optimizer,
+            resumed_scheduler,
+            resumed_scaler,
+            torch.device("cpu"),
+            steps_per_epoch=4,
+            is_main=False,
+        )
+
+        assert resume_state["global_step"] == 7
+        assert resume_state["start_epoch"] == 1
+        assert resume_state["start_batch_idx"] == 3
+        assert resumed_scheduler.state_dict()["last_epoch"] == scheduler.state_dict()["last_epoch"]
+        assert resumed_optimizer.param_groups[0]["lr"] == optimizer.param_groups[0]["lr"]
+        assert len(resumed_optimizer.state_dict()["state"]) == len(optimizer.state_dict()["state"])
+
+        original_sd = model.state_dict()
+        resumed_sd = resumed_model.state_dict()
+        for key in checkpoint["model_state_dict"]:
+            assert torch.equal(original_sd[key], resumed_sd[key]), f"Mismatch after resume: {key}"
+
+    print("  ✓ v2 checkpoint records scheduler/scaler/RNG/config metadata")
+    print("  ✓ Resume restores step, epoch, next batch, optimizer, scheduler, and model tensors")
+    print()
+
+
+def test_legacy_checkpoint_resume_compatibility():
+    """Test legacy checkpoint format can resume best-effort from step."""
+    print("=" * 60)
+    print("TEST: Legacy Checkpoint Resume Compatibility")
+    print("=" * 60)
+
+    from train import _checkpoint_trainable_state_dict, load_training_checkpoint
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model = _make_checkpoint_test_model()
+        trainable_params = model.get_trainable_params()
+        optimizer = torch.optim.AdamW(trainable_params, lr=5e-5, weight_decay=0.01)
+        _prime_optimizer_state(optimizer, trainable_params)
+
+        ckpt_path = os.path.join(tmpdir, "legacy.pt")
+        torch.save(
+            {
+                "step": 6,
+                "model_state_dict": _checkpoint_trainable_state_dict(model, trainable_params),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "loss": 2.0,
+            },
+            ckpt_path,
+        )
+
+        resumed_model = _make_checkpoint_test_model()
+        resumed_params = resumed_model.get_trainable_params()
+        resumed_optimizer = torch.optim.AdamW(resumed_params, lr=5e-5, weight_decay=0.01)
+        resume_state = load_training_checkpoint(
+            ckpt_path,
+            resumed_model,
+            resumed_optimizer,
+            scheduler=None,
+            scaler=torch.amp.GradScaler("cuda", enabled=False),
+            device=torch.device("cpu"),
+            steps_per_epoch=4,
+            is_main=False,
+        )
+
+        assert resume_state["global_step"] == 6
+        assert resume_state["start_epoch"] == 1
+        assert resume_state["start_batch_idx"] == 2
+        assert len(resumed_optimizer.state_dict()["state"]) == len(optimizer.state_dict()["state"])
+
+    print("  ✓ Legacy checkpoint resumes without v2 metadata")
+    print("  ✓ Missing epoch/batch is inferred from step and steps_per_epoch")
     print()
 
 
@@ -996,6 +1169,8 @@ def run_all_tests():
         ("TensorBoard Visual Debug Helpers", test_tensorboard_visual_debug_helpers),
         ("Training Loop", test_training_loop),
         ("Checkpoint Save (Fix T2)", test_checkpoint_save),
+        ("Checkpoint Resume Roundtrip", test_checkpoint_resume_roundtrip),
+        ("Legacy Checkpoint Resume Compatibility", test_legacy_checkpoint_resume_compatibility),
         ("Degradation Pipeline", test_degradation_pipeline),
         ("Dataset & Collate", test_dataset),
     ]
