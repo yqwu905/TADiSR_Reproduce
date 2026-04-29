@@ -600,6 +600,137 @@ def test_taca_attn_processor():
     print()
 
 
+def _reference_cross_attention(attn, hidden_states, encoder_hidden_states, text_indices):
+    """Old full-attention math used as a small fp32 correctness oracle."""
+    residual = hidden_states
+    batch_size = hidden_states.shape[0]
+    query = attn.to_q(hidden_states)
+    key = attn.to_k(encoder_hidden_states)
+    value = attn.to_v(encoder_hidden_states)
+    inner_dim = key.shape[-1]
+    head_dim = inner_dim // attn.heads
+
+    query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+    key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+    value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+
+    weights = torch.matmul(query, key.transpose(-2, -1)) * (head_dim ** -0.5)
+    weights = weights.softmax(dim=-1)
+    a_tex = weights[:, :, :, text_indices].mean(dim=-1).contiguous()
+    out = torch.matmul(weights, value)
+    out = out.transpose(1, 2).reshape(batch_size, -1, inner_dim)
+    out = attn.to_out[0](out)
+    out = attn.to_out[1](out)
+    if attn.residual_connection:
+        out = out + residual
+    out = out / attn.rescale_output_factor
+    return out, a_tex
+
+
+def test_taca_chunked_attention_equivalence_and_grad():
+    """Verify chunked TACA slice matches full attention and keeps gradients."""
+    print("=" * 60)
+    print("TEST: Chunked TACA Attention Equivalence")
+    print("=" * 60)
+
+    try:
+        from diffusers.models.attention_processor import Attention
+    except ImportError:
+        print("  ! diffusers not installed, skipping equivalence test")
+        print()
+        return
+
+    from models.tadisr_model import TACAAttnProcessor
+
+    torch.manual_seed(7)
+    attn = Attention(
+        query_dim=8,
+        cross_attention_dim=8,
+        heads=2,
+        dim_head=4,
+        dropout=0.0,
+        bias=True,
+        residual_connection=False,
+    )
+    attn.eval()
+    hidden_states = torch.randn(1, 17, 8, requires_grad=True)
+    encoder_hidden_states = torch.randn(1, 9, 8, requires_grad=True)
+    text_indices = [2, 5]
+
+    ref_out, ref_slice = _reference_cross_attention(
+        attn, hidden_states, encoder_hidden_states, text_indices
+    )
+    proc = TACAAttnProcessor(
+        text_token_indices=text_indices,
+        layer_id=0,
+        query_chunk_size=4,
+        use_checkpoint=True,
+        detach_taca=False,
+    )
+    out = proc(attn, hidden_states, encoder_hidden_states=encoder_hidden_states)
+
+    assert torch.allclose(out, ref_out, atol=1e-5), "SDPA output should match full attention"
+    assert torch.allclose(proc.a_tex_slice, ref_slice, atol=1e-5), \
+        "Chunked TACA slice should match full attention slice"
+
+    loss = out.sum() + proc.a_tex_slice.sum()
+    loss.backward()
+    assert attn.to_q.weight.grad is not None, "TACA path should keep query gradients"
+    assert attn.to_k.weight.grad is not None, "TACA path should keep key gradients"
+
+    print("  ✓ SDPA output matches full attention oracle")
+    print("  ✓ Chunked text-token slice matches full attention oracle")
+    print("  ✓ Gradients flow through query/key projections")
+    print()
+
+
+def test_lora_failure_is_fatal():
+    """LoRA setup failures must not silently train the full UNet."""
+    print("=" * 60)
+    print("TEST: LoRA Failure Is Fatal")
+    print("=" * 60)
+
+    from models.tadisr_model import TADiSRWrapper
+    import torch.nn as nn
+
+    model = TADiSRWrapper.__new__(TADiSRWrapper)
+    nn.Module.__init__(model)
+    model.unet_backbone = nn.Linear(4, 4)
+    model.fail_on_lora_error = True
+
+    try:
+        model._apply_lora(rank=4)
+    except RuntimeError as exc:
+        assert "LoRA setup failed" in str(exc), str(exc)
+    else:
+        raise AssertionError("LoRA failure should raise RuntimeError")
+
+    print("  ✓ LoRA setup failure raises instead of falling back to full-UNet training")
+    print()
+
+
+def test_jsd_dim_controls_channels():
+    """Verify jsd_dim is wired into JSD channel width."""
+    print("=" * 60)
+    print("TEST: jsd_dim Controls JSD Width")
+    print("=" * 60)
+
+    from models.vae_jsd import create_jsd
+
+    small = create_jsd(vae=None, latent_channels=4, lora_rank=4, base_channels=16)
+    default = create_jsd(vae=None, latent_channels=4, lora_rank=4, lightweight=True)
+
+    assert tuple(small.img_decoder.block_out_channels) == (16, 32, 64, 64), \
+        f"Unexpected jsd_dim channels: {small.img_decoder.block_out_channels}"
+    small_params = sum(p.numel() for p in small.parameters())
+    default_params = sum(p.numel() for p in default.parameters())
+    assert small_params < default_params, "Smaller jsd_dim should reduce parameter count"
+
+    print(f"  ✓ jsd_dim=16 → {small.img_decoder.block_out_channels}")
+    print(f"  ✓ Parameter count decreases: {small_params:,} < {default_params:,}")
+    print()
+
+
 def test_diffusers_taca_integration():
     """Verify TACA installs correctly on a real diffusers UNet."""
     print("=" * 60)
@@ -698,6 +829,9 @@ def run_all_tests():
         ("Loss Functions", test_losses),
         ("LR Upsample (Fix M4)", test_lr_upsample),
         ("TACA AttnProcessor (Fix M1)", test_taca_attn_processor),
+        ("Chunked TACA Attention Equivalence", test_taca_chunked_attention_equivalence_and_grad),
+        ("LoRA Failure Is Fatal", test_lora_failure_is_fatal),
+        ("jsd_dim Controls JSD Width", test_jsd_dim_controls_channels),
         ("Diffusers TACA Integration", test_diffusers_taca_integration),
         ("VAE Normalization Helpers", test_vae_normalization_helpers),
         ("Full Model Forward", test_full_model_forward),

@@ -13,20 +13,38 @@ Paper reference (Section 4.1):
 import os
 import yaml
 import argparse
+from contextlib import nullcontext
 from types import SimpleNamespace
 import torch
 import torch.optim as optim
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import MixedPrecision
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+    CheckpointImpl,
+    apply_activation_checkpointing,
+    checkpoint_wrapper,
+)
 from torch.utils.data import DataLoader, ConcatDataset
 from torch.utils.data.distributed import DistributedSampler
-from torch.utils.tensorboard import SummaryWriter
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ModuleNotFoundError:
+    SummaryWriter = None
 
 from models.tadisr_model import TADiSRWrapper
+from models.vae_jsd import CDIB, DecoderBranch, JointSegmentationDecoders, UNetMidBlock2D, UpDecoderBlock2D
 from losses.composite_loss import CompositeTADiSRLoss
 from data.dataset import TADiSRDataset, tadisr_collate_fn
 
+
+class _NullSummaryWriter:
+    def add_scalar(self, *args, **kwargs):
+        return None
+
+    def close(self):
+        return None
 
 
 def load_config(config_path):
@@ -54,6 +72,16 @@ def load_config(config_path):
     cfg.setdefault("precomputed_text_context_path", None)
     # Distributed strategy: ddp | fsdp (used when WORLD_SIZE > 1)
     cfg.setdefault("dist_strategy", "ddp")
+    cfg.setdefault("precision", "bf16")
+    cfg.setdefault("gradient_checkpointing", True)
+    cfg.setdefault("fsdp_auto_wrap", True)
+    cfg.setdefault("fsdp_activation_checkpointing", True)
+    cfg.setdefault("lpips_resize", 512)
+    cfg.setdefault("taca_query_chunk_size", 1024)
+    cfg.setdefault("taca_checkpoint", True)
+    cfg.setdefault("taca_detach", False)
+    cfg.setdefault("fail_on_lora_error", True)
+    cfg.setdefault("require_precomputed_text_context", False)
 
     return SimpleNamespace(**cfg)
 
@@ -126,6 +154,107 @@ def _resolve_fsdp_device_id(ddp_state):
 
     # CPU/gloo FSDP is not targeted in this project training path.
     return None
+
+
+def _resolve_precision_dtype(precision: str):
+    precision = str(precision or "fp32").lower()
+    if precision in {"bf16", "bfloat16"}:
+        return "bf16", torch.bfloat16
+    if precision in {"fp16", "float16", "half"}:
+        return "fp16", torch.float16
+    if precision in {"fp32", "float32", "full"}:
+        return "fp32", torch.float32
+    raise ValueError(f"Unsupported precision: {precision}. Use bf16, fp16, or fp32.")
+
+
+def _autocast_context(device, precision_name, dtype):
+    if precision_name == "fp32":
+        return nullcontext()
+    if device.type in {"cuda", "cpu"}:
+        return torch.autocast(device_type=device.type, dtype=dtype)
+    return nullcontext()
+
+
+def _build_fsdp_mixed_precision(precision_name, dtype):
+    if precision_name == "fp32":
+        return None
+    return MixedPrecision(
+        param_dtype=dtype,
+        reduce_dtype=dtype,
+        buffer_dtype=dtype,
+    )
+
+
+def _is_large_checkpoint_target(module):
+    if isinstance(module, (CDIB, DecoderBranch, JointSegmentationDecoders, UNetMidBlock2D, UpDecoderBlock2D)):
+        return True
+    name = module.__class__.__name__
+    return name in {
+        "BasicTransformerBlock",
+        "CrossAttnDownBlock2D",
+        "CrossAttnUpBlock2D",
+        "DownBlock2D",
+        "UpBlock2D",
+        "UNetMidBlock2DCrossAttn",
+    }
+
+
+def _fsdp_auto_wrap_policy(module, recurse, nonwrapped_numel):
+    if recurse:
+        return True
+    return _is_large_checkpoint_target(module)
+
+
+def _apply_fsdp_activation_checkpointing(model):
+    def check_fn(module):
+        return module.__class__.__name__ in {
+            "BasicTransformerBlock",
+            "CrossAttnDownBlock2D",
+            "CrossAttnUpBlock2D",
+            "DownBlock2D",
+            "UpBlock2D",
+            "UNetMidBlock2DCrossAttn",
+        }
+
+    matched = sum(1 for module in model.modules() if check_fn(module))
+    if matched == 0:
+        return 0
+
+    def wrapper(module):
+        return checkpoint_wrapper(
+            module,
+            checkpoint_impl=CheckpointImpl.NO_REENTRANT,
+        )
+    apply_activation_checkpointing(
+        model,
+        checkpoint_wrapper_fn=wrapper,
+        check_fn=check_fn,
+    )
+    return matched
+
+
+def _print_trainable_summary(model, is_main):
+    if not is_main:
+        return
+    raw_model = model.module if hasattr(model, "module") else model
+    summary_fn = getattr(raw_model, "get_trainable_param_summary", None)
+    if callable(summary_fn):
+        summary = summary_fn()
+        print("  Trainable parameter groups:")
+        for name, count in summary.items():
+            if count:
+                print(f"    {name}: {count:,}")
+
+
+def _cuda_memory_stats(device):
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    idx = device.index if device.index is not None else torch.cuda.current_device()
+    return {
+        "allocated_mb": torch.cuda.memory_allocated(idx) / 1024 ** 2,
+        "reserved_mb": torch.cuda.memory_reserved(idx) / 1024 ** 2,
+        "peak_mb": torch.cuda.max_memory_allocated(idx) / 1024 ** 2,
+    }
 
 
 def create_datasets(args):
@@ -223,6 +352,7 @@ def train(args):
     is_main = ddp_state["rank"] == 0
     device = ddp_state["device"]
     dist_strategy = str(getattr(args, "dist_strategy", "ddp")).lower()
+    precision_name, precision_dtype = _resolve_precision_dtype(getattr(args, "precision", "bf16"))
     if dist_strategy not in {"ddp", "fsdp"}:
         raise ValueError(f"Unsupported dist_strategy: {dist_strategy}. Use 'ddp' or 'fsdp'.")
 
@@ -231,11 +361,22 @@ def train(args):
         print(f"  LR: {args.lr}, Batch size(per-process): {args.batch_size}")
         print(f"  Max iterations: {args.max_iters}")
         print(f"  Gradient clip: {args.grad_clip}")
+        print(f"  Precision: {precision_name}")
+        print(f"  Gradient checkpointing: {bool(getattr(args, 'gradient_checkpointing', False))}")
+        print(f"  TACA chunk: {getattr(args, 'taca_query_chunk_size', 0)}")
+        print(f"  TACA checkpoint: {bool(getattr(args, 'taca_checkpoint', False))}")
+        print(f"  LPIPS resize: {getattr(args, 'lpips_resize', 0)}")
         if ddp_state["distributed"]:
             print(f"  Distributed enabled ({dist_strategy.upper()}) — world_size: {ddp_state['world_size']}")
 
     tb_log_dir = getattr(args, "tensorboard_log_dir", os.path.join(args.ckpt_dir, "tensorboard"))
-    tb_writer = SummaryWriter(log_dir=tb_log_dir) if is_main else None
+    if is_main and SummaryWriter is not None:
+        tb_writer = SummaryWriter(log_dir=tb_log_dir)
+    elif is_main:
+        tb_writer = _NullSummaryWriter()
+        print("  TensorBoard not installed; scalar logging disabled.")
+    else:
+        tb_writer = None
     if is_main:
         print(f"  TensorBoard log dir: {tb_log_dir}")
 
@@ -268,16 +409,36 @@ def train(args):
         use_kolors=args.use_kolors,
         context_dim=args.context_dim,
         lora_rank=args.lora_rank,
+        jsd_dim=getattr(args, "jsd_dim", None),
+        gradient_checkpointing=getattr(args, "gradient_checkpointing", False),
+        taca_query_chunk_size=getattr(args, "taca_query_chunk_size", 1024),
+        taca_checkpoint=getattr(args, "taca_checkpoint", True),
+        taca_detach=getattr(args, "taca_detach", False),
+        fail_on_lora_error=getattr(args, "fail_on_lora_error", True),
+        require_precomputed_text_context=getattr(args, "require_precomputed_text_context", False),
         precomputed_text_context_path=getattr(args, "precomputed_text_context_path", None),
-    ).to(device)
+        torch_dtype=precision_dtype,
+    )
+    if not (ddp_state["distributed"] and dist_strategy == "fsdp"):
+        model = model.to(device)
 
     # 3. Optimizer — only trainable parameters (LoRA + JSD)
+    model.assert_trainable_parameter_contract()
     trainable_params = model.get_trainable_params()
     total_params = sum(p.numel() for p in model.parameters())
     train_params = sum(p.numel() for p in trainable_params)
     if is_main:
         print(f"  Total params:     {total_params:,}")
         print(f"  Trainable params: {train_params:,} ({100*train_params/total_params:.2f}%)")
+    _print_trainable_summary(model, is_main)
+
+    fsdp_checkpoint_targets = 0
+    if (
+        ddp_state["distributed"]
+        and dist_strategy == "fsdp"
+        and getattr(args, "fsdp_activation_checkpointing", False)
+    ):
+        fsdp_checkpoint_targets = _apply_fsdp_activation_checkpointing(model)
 
     if ddp_state["distributed"]:
         if dist_strategy == "ddp":
@@ -298,10 +459,19 @@ def train(args):
                 model,
                 device_id=fsdp_device_id,
                 use_orig_params=True,
+                auto_wrap_policy=_fsdp_auto_wrap_policy if getattr(args, "fsdp_auto_wrap", True) else None,
+                mixed_precision=_build_fsdp_mixed_precision(precision_name, precision_dtype),
             )
     raw_model = model.module if ddp_state["distributed"] else model
+    if is_main and ddp_state["distributed"] and dist_strategy == "fsdp":
+        print(f"  FSDP auto wrap: {bool(getattr(args, 'fsdp_auto_wrap', True))}")
+        print(f"  FSDP activation checkpoint targets: {fsdp_checkpoint_targets}")
 
     optimizer = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.01)
+    scaler = torch.amp.GradScaler(
+        "cuda",
+        enabled=(precision_name == "fp16" and device.type == "cuda"),
+    )
 
     # 4. Learning rate scheduler (optional warmup + cosine)
     if args.warmup_iters > 0:
@@ -314,11 +484,15 @@ def train(args):
         scheduler = None
 
     # 5. Loss
-    criterion = CompositeTADiSRLoss().to(device)
+    criterion = CompositeTADiSRLoss(
+        lpips_resize=getattr(args, "lpips_resize", 0),
+    ).to(device)
 
     # 6. Training Loop
     model.train()
     global_step = 0
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
 
     for ep in range(args.epochs):
         if sampler is not None:
@@ -334,21 +508,43 @@ def train(args):
             context = batch["context"].to(device)
             text_indices = batch["text_indices"][0]
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
-            # Forward — Paper loss: ℓ_tot = ℓ_img + ℓ_seg (NO noise loss)
-            x_pred, s_pred = model.forward_train(
-                lr_img, context, text_indices
-            )
+            with _autocast_context(device, precision_name, precision_dtype):
+                # Forward — Paper loss: ℓ_tot = ℓ_img + ℓ_seg (NO noise loss)
+                x_pred, s_pred = model.forward_train(
+                    lr_img, context, text_indices
+                )
 
-            # Calculate composite loss
-            loss, loss_img, loss_seg = criterion(x_pred, hr_img, s_pred, mask)
+                # Calculate composite loss
+                loss, loss_img, loss_seg = criterion(x_pred, hr_img, s_pred, mask)
+            loss_for_backward = loss.float()
 
             # Backward with gradient clipping
-            loss.backward()
-            if args.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clip)
-            optimizer.step()
+            if scaler.is_enabled():
+                scaler.scale(loss_for_backward).backward()
+                scaler.unscale_(optimizer)
+                if args.grad_clip > 0:
+                    if dist_strategy == "fsdp" and isinstance(model, FSDP):
+                        model.clip_grad_norm_(args.grad_clip)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(
+                            [p for p in model.parameters() if p.requires_grad],
+                            args.grad_clip,
+                        )
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss_for_backward.backward()
+                if args.grad_clip > 0:
+                    if dist_strategy == "fsdp" and isinstance(model, FSDP):
+                        model.clip_grad_norm_(args.grad_clip)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(
+                            [p for p in model.parameters() if p.requires_grad],
+                            args.grad_clip,
+                        )
+                optimizer.step()
 
             if scheduler is not None:
                 scheduler.step()
@@ -361,12 +557,24 @@ def train(args):
                 tb_writer.add_scalar("train/loss_img", loss_img.item(), global_step)
                 tb_writer.add_scalar("train/loss_seg", loss_seg.item(), global_step)
                 tb_writer.add_scalar("train/lr", current_lr, global_step)
+                mem = _cuda_memory_stats(device)
+                if mem is not None:
+                    tb_writer.add_scalar("memory/allocated_mb", mem["allocated_mb"], global_step)
+                    tb_writer.add_scalar("memory/reserved_mb", mem["reserved_mb"], global_step)
+                    tb_writer.add_scalar("memory/peak_mb", mem["peak_mb"], global_step)
+                    mem_txt = (
+                        f" Mem: alloc={mem['allocated_mb']:.0f}MB "
+                        f"reserved={mem['reserved_mb']:.0f}MB peak={mem['peak_mb']:.0f}MB"
+                    )
+                else:
+                    mem_txt = ""
                 print(
                     f"[Step {global_step:6d}] "
                     f"Loss: {loss.item():.4f} "
                     f"(Img: {loss_img.item():.4f}, "
                     f"Seg: {loss_seg.item():.4f}) "
                     f"LR: {current_lr:.2e}"
+                    f"{mem_txt}"
                 )
 
             # Save checkpoint
@@ -396,6 +604,12 @@ def train(args):
             break
 
     if is_main:
+        mem = _cuda_memory_stats(device)
+        if mem is not None:
+            print(
+                f"Peak CUDA memory: alloc={mem['allocated_mb']:.0f}MB "
+                f"reserved={mem['reserved_mb']:.0f}MB peak={mem['peak_mb']:.0f}MB"
+            )
         tb_writer.close()
         print(f"\nTraining complete! {global_step} iterations.")
     cleanup_distributed(ddp_state)

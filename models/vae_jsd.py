@@ -29,6 +29,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 # ---------------------------------------------------------------------------
@@ -389,10 +390,12 @@ class JointSegmentationDecoders(nn.Module):
     def __init__(self, block_out_channels=(128, 256, 512, 512),
                  layers_per_block=2, latent_channels=4,
                  lora_rank=16, norm_num_groups=32,
-                 latent_scaling_factor: float = 1.0):
+                 latent_scaling_factor: float = 1.0,
+                 gradient_checkpointing: bool = False):
         super().__init__()
         self.lora_rank = lora_rank
         self.latent_scaling_factor = float(latent_scaling_factor)
+        self.gradient_checkpointing = bool(gradient_checkpointing)
 
         # Image decoder: output 3 channels (RGB image)
         self.img_decoder = DecoderBranch(
@@ -421,6 +424,16 @@ class JointSegmentationDecoders(nn.Module):
 
         self._lora_applied = False
         self._vae_loaded = False
+
+    def set_gradient_checkpointing(self, enabled: bool = True):
+        self.gradient_checkpointing = bool(enabled)
+
+    def _maybe_checkpoint(self, fn, *args):
+        if self.gradient_checkpointing and torch.is_grad_enabled() and any(
+            isinstance(arg, torch.Tensor) and arg.requires_grad for arg in args
+        ):
+            return checkpoint(fn, *args, use_reentrant=False)
+        return fn(*args)
 
     # -------------------------------------------------------------------
     # Weight loading from Kolors VAE
@@ -542,20 +555,20 @@ class JointSegmentationDecoders(nn.Module):
         h_seg = self.seg_decoder.conv_in(a_tex)
 
         # --- mid_block ---
-        h_img = self.img_decoder.mid_block(h_img)
-        h_seg = self.seg_decoder.mid_block(h_seg)
-        h_img, h_seg = self.cdibs[0](h_img, h_seg)
+        h_img = self._maybe_checkpoint(self.img_decoder.mid_block, h_img)
+        h_seg = self._maybe_checkpoint(self.seg_decoder.mid_block, h_seg)
+        h_img, h_seg = self._maybe_checkpoint(self.cdibs[0], h_img, h_seg)
 
         # --- up_blocks with CDIB after resnets, before upsample ---
         for i, (img_block, seg_block) in enumerate(
             zip(self.img_decoder.up_blocks, self.seg_decoder.up_blocks)
         ):
             # Process resnets
-            h_img = img_block.forward_resnets_only(h_img)
-            h_seg = seg_block.forward_resnets_only(h_seg)
+            h_img = self._maybe_checkpoint(img_block.forward_resnets_only, h_img)
+            h_seg = self._maybe_checkpoint(seg_block.forward_resnets_only, h_seg)
 
             # CDIB interaction (index offset by 1 because cdib[0] is mid)
-            h_img, h_seg = self.cdibs[i + 1](h_img, h_seg)
+            h_img, h_seg = self._maybe_checkpoint(self.cdibs[i + 1], h_img, h_seg)
 
             # Upsample (if not final block)
             h_img = img_block.forward_upsample_only(h_img)
@@ -575,7 +588,8 @@ class JointSegmentationDecoders(nn.Module):
 # Factory function
 # ---------------------------------------------------------------------------
 def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
-               latent_channels=4, lora_rank=16, lightweight=False):
+               latent_channels=4, lora_rank=16, lightweight=False,
+               base_channels=None, gradient_checkpointing: bool = False):
     """Create JSD, optionally loading from a Kolors VAE.
 
     Args:
@@ -587,7 +601,20 @@ def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
         latent_channels: Latent channel count. Default 4.
         lora_rank: LoRA adapter rank. Default 16.
         lightweight: If True and no VAE, use smaller [32, 64, 128, 128] config.
+        base_channels: Optional first decoder channel. If set, uses
+            [base, 2*base, 4*base, 4*base] to make jsd_dim effective.
     """
+    if base_channels is not None:
+        base_channels = int(base_channels)
+        if base_channels <= 0:
+            raise ValueError(f"base_channels must be positive, got {base_channels}")
+        block_out_channels = [
+            base_channels,
+            base_channels * 2,
+            base_channels * 4,
+            base_channels * 4,
+        ]
+
     if vae is not None:
         # Read architecture from VAE config
         cfg = vae.config
@@ -617,6 +644,7 @@ def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
         lora_rank=lora_rank,
         norm_num_groups=nng,
         latent_scaling_factor=latent_scaling_factor,
+        gradient_checkpointing=gradient_checkpointing,
     )
 
     if vae is not None:

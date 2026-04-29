@@ -205,7 +205,8 @@ class CompositeTADiSRLoss(nn.Module):
     def __init__(self, lambda1: float = 5.0, lambda2: float = 10.0,
                  lambda3: float = 10.0, lambda4: float = 1.0,
                  focal_gamma: float = 2.0, focal_alpha: float = 0.75,
-                 use_alpha_focal: bool = False):
+                 use_alpha_focal: bool = False,
+                 lpips_resize: int = 0):
         """
         Args:
             use_alpha_focal: If True, use alpha-balanced focal loss.
@@ -218,6 +219,7 @@ class CompositeTADiSRLoss(nn.Module):
         self.lambda2 = lambda2
         self.lambda3 = lambda3
         self.lambda4 = lambda4
+        self.lpips_resize = int(lpips_resize or 0)
 
         self.mse = nn.MSELoss()
         self.mfl = ModifiedFocalLoss(gamma=focal_gamma)
@@ -245,6 +247,17 @@ class CompositeTADiSRLoss(nn.Module):
     def _lpips_loss(self, x_pred, x_hr):
         """Compute LPIPS or fallback perceptual loss."""
         if self._use_real_lpips:
+            if self.lpips_resize > 0:
+                max_side = max(x_pred.shape[-2:])
+                if max_side > self.lpips_resize:
+                    x_pred = F.interpolate(
+                        x_pred, size=(self.lpips_resize, self.lpips_resize),
+                        mode="bilinear", align_corners=False
+                    )
+                    x_hr = F.interpolate(
+                        x_hr, size=(self.lpips_resize, self.lpips_resize),
+                        mode="bilinear", align_corners=False
+                    )
             # LPIPS expects [-1, 1] range
             return self.lpips_fn(x_pred * 2 - 1, x_hr * 2 - 1).mean()
         else:

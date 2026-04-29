@@ -1,13 +1,14 @@
 ftsr_dir: dataset/FTSR
 realce_dir: dataset/Real-CE
-use_kolors: false
+use_kolors: true
 context_dim: 4096
-jsd_dim: null  # null keeps lightweight fallback width for CPU smoke tests
+jsd_dim: 128
 lora_rank: 16
-precomputed_text_context_path: null  # e.g. assets/fixed_prompt_context.pt
-device: cpu
-dist_strategy: ddp  # ddp | fsdp
-precision: bf16  # bf16 | fp16 | fp32
+precomputed_text_context_path: assets/fixed_prompt_context.pt
+require_precomputed_text_context: true
+device: cuda
+dist_strategy: fsdp
+precision: bf16
 gradient_checkpointing: true
 fsdp_auto_wrap: true
 fsdp_activation_checkpointing: true
@@ -15,7 +16,6 @@ taca_query_chunk_size: 1024
 taca_checkpoint: true
 taca_detach: false
 fail_on_lora_error: true
-require_precomputed_text_context: false
 lpips_resize: 512
 batch_size: 1
 lr: 5e-5
@@ -25,5 +25,5 @@ max_iters: 200000
 epochs: 9999
 log_every: 10
 save_every: 5000
-ckpt_dir: checkpoints
-tensorboard_log_dir: checkpoints/tensorboard
+ckpt_dir: checkpoints/kolors_1024_fsdp
+tensorboard_log_dir: checkpoints/tensorboard/kolors_1024_fsdp

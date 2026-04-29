@@ -19,6 +19,7 @@ import torch.nn.functional as F
 import math
 import os
 from typing import Optional, List
+from torch.utils.checkpoint import checkpoint
 
 from .vae_jsd import JointSegmentationDecoders, create_jsd
 
@@ -38,13 +39,16 @@ def linear_beta_schedule(timesteps: int = 1000, beta_start: float = 0.00085,
 # ---------------------------------------------------------------------------
 # Try to load real Kolors components from diffusers
 # ---------------------------------------------------------------------------
-def _try_load_kolors_vae(pretrained_path: str = "Kwai-Kolors/Kolors-diffusers"):
+def _try_load_kolors_vae(
+    pretrained_path: str = "Kwai-Kolors/Kolors-diffusers",
+    torch_dtype: torch.dtype = torch.float32,
+):
     """Load Kolors VAE (AutoencoderKL) from HuggingFace."""
     try:
         from diffusers import AutoencoderKL
         vae = AutoencoderKL.from_pretrained(
             pretrained_path, subfolder="vae",
-            torch_dtype=torch.float32,
+            torch_dtype=torch_dtype,
         )
         vae.requires_grad_(False)  # Freeze VAE encoder
         print(f"[TADiSR] ✓ Loaded Kolors VAE from {pretrained_path}")
@@ -54,13 +58,16 @@ def _try_load_kolors_vae(pretrained_path: str = "Kwai-Kolors/Kolors-diffusers"):
         return None, 4
 
 
-def _try_load_kolors_unet(pretrained_path: str = "Kwai-Kolors/Kolors-diffusers"):
+def _try_load_kolors_unet(
+    pretrained_path: str = "Kwai-Kolors/Kolors-diffusers",
+    torch_dtype: torch.dtype = torch.float32,
+):
     """Load Kolors UNet2DConditionModel from HuggingFace."""
     try:
         from diffusers import UNet2DConditionModel
         unet = UNet2DConditionModel.from_pretrained(
             pretrained_path, subfolder="unet",
-            torch_dtype=torch.float32,
+            torch_dtype=torch_dtype,
         )
         print(f"[TADiSR] ✓ Loaded Kolors UNet from {pretrained_path}")
         return unet
@@ -69,7 +76,10 @@ def _try_load_kolors_unet(pretrained_path: str = "Kwai-Kolors/Kolors-diffusers")
         return None
 
 
-def _try_load_kolors_text_encoder(pretrained_path: str = "Kwai-Kolors/Kolors-diffusers"):
+def _try_load_kolors_text_encoder(
+    pretrained_path: str = "Kwai-Kolors/Kolors-diffusers",
+    torch_dtype: torch.dtype = torch.float32,
+):
     """Load ChatGLM text encoder used by Kolors."""
     try:
         from transformers import AutoTokenizer, AutoModel
@@ -78,7 +88,7 @@ def _try_load_kolors_text_encoder(pretrained_path: str = "Kwai-Kolors/Kolors-dif
         )
         text_encoder = AutoModel.from_pretrained(
             pretrained_path, subfolder="text_encoder", trust_remote_code=True,
-            torch_dtype=torch.float32,
+            torch_dtype=torch_dtype,
         )
         text_encoder.requires_grad_(False)
         text_encoder.eval()
@@ -161,17 +171,113 @@ class TACAAttnProcessor(nn.Module):
       a_tex_raw = Concat(Search(a^1, c_tex), ..., Search(a^M, c_tex))
       a_tex = W_a · a_tex_raw
 
-    This processor replaces the default AttnProcessor2_0 in cross-attention
-    layers (attn2) of the UNet. It computes standard cross-attention output
-    AND stores the attention weights for the "text" token indices.
+    This processor keeps the standard attention output on SDPA/Flash kernels
+    and computes only the text-token attention slice needed by TACA.
     """
 
-    def __init__(self, text_token_indices: List[int], layer_id: int):
+    def __init__(
+        self,
+        text_token_indices: List[int],
+        layer_id: int,
+        query_chunk_size: int = 1024,
+        use_checkpoint: bool = True,
+        detach_taca: bool = False,
+    ):
         super().__init__()
-        self.text_token_indices = text_token_indices
+        self.text_token_indices = [int(i) for i in text_token_indices]
         self.layer_id = layer_id
+        self.query_chunk_size = int(query_chunk_size) if query_chunk_size else 0
+        self.use_checkpoint = bool(use_checkpoint)
+        self.detach_taca = bool(detach_taca)
         # Will be populated during forward pass
         self.a_tex_slice = None  # [B, num_heads, spatial_dim]
+
+    @staticmethod
+    def _normalize_encoder_hidden_states(attn, encoder_hidden_states):
+        """Match diffusers Attention cross-normalization across versions."""
+        if not getattr(attn, "norm_cross", False):
+            return encoder_hidden_states
+        norm_fn = getattr(attn, "norm_encoder_hidden_states", None)
+        if callable(norm_fn):
+            return norm_fn(encoder_hidden_states)
+        norm_module = getattr(attn, "norm_cross", None)
+        if isinstance(norm_module, nn.Module):
+            return norm_module(encoder_hidden_states)
+        return encoder_hidden_states
+
+    @staticmethod
+    def _slice_attention_mask(attention_mask, start: int, end: int):
+        if attention_mask is None:
+            return None
+        if attention_mask.shape[-2] == 1:
+            return attention_mask
+        if attention_mask.shape[-2] >= end:
+            return attention_mask[..., start:end, :]
+        return attention_mask
+
+    def _text_slice_chunk(self, query_chunk, key, attention_mask):
+        """Compute softmax probabilities for text tokens with full-token normalization."""
+        source_len = key.shape[-2]
+        invalid = [i for i in self.text_token_indices if i < 0 or i >= source_len]
+        if invalid:
+            raise IndexError(
+                f"TACA text_token_indices out of range for source length {source_len}: {invalid}"
+            )
+
+        scores = torch.matmul(
+            query_chunk.float(), key.transpose(-2, -1).float()
+        ) * (query_chunk.shape[-1] ** -0.5)
+        if attention_mask is not None:
+            scores = scores + attention_mask.to(dtype=scores.dtype)
+
+        log_denom = torch.logsumexp(scores, dim=-1, keepdim=True)
+        text_scores = scores.index_select(
+            dim=-1,
+            index=torch.as_tensor(
+                self.text_token_indices,
+                device=scores.device,
+                dtype=torch.long,
+            ),
+        )
+        text_probs = torch.exp(text_scores - log_denom).mean(dim=-1)
+        return text_probs.to(dtype=query_chunk.dtype)
+
+    def _compute_text_attention_slice(self, query, key, attention_mask):
+        if not self.text_token_indices:
+            return None
+
+        query_len = query.shape[-2]
+        chunk_size = self.query_chunk_size if self.query_chunk_size > 0 else query_len
+        chunks = []
+        for start in range(0, query_len, chunk_size):
+            end = min(start + chunk_size, query_len)
+            query_chunk = query[:, :, start:end, :]
+            mask_chunk = self._slice_attention_mask(attention_mask, start, end)
+
+            if self.use_checkpoint and torch.is_grad_enabled() and query_chunk.requires_grad:
+                if mask_chunk is None:
+                    chunk = checkpoint(
+                        lambda q, k: self._text_slice_chunk(q, k, None),
+                        query_chunk,
+                        key,
+                        use_reentrant=False,
+                    )
+                else:
+                    chunk = checkpoint(
+                        lambda q, k, m: self._text_slice_chunk(q, k, m),
+                        query_chunk,
+                        key,
+                        mask_chunk,
+                        use_reentrant=False,
+                    )
+            else:
+                chunk = self._text_slice_chunk(query_chunk, key, mask_chunk)
+            chunks.append(chunk)
+
+        a_slice = torch.cat(chunks, dim=-1).contiguous()
+        if self.detach_taca:
+            a_slice = a_slice.detach()
+        return a_slice
 
     def __call__(self, attn, hidden_states, encoder_hidden_states=None,
                  attention_mask=None, temb=None, **kwargs):
@@ -185,22 +291,37 @@ class TACAAttnProcessor(nn.Module):
         """
         residual = hidden_states
 
-        if attn.spatial_norm is not None:
+        if getattr(attn, "spatial_norm", None) is not None:
             hidden_states = attn.spatial_norm(hidden_states, temb)
 
         input_ndim = hidden_states.ndim
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
             hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
-        else:
-            batch_size = hidden_states.shape[0]
+        batch_size = hidden_states.shape[0]
+
+        is_cross_attention = encoder_hidden_states is not None
+        sequence_length = (
+            hidden_states.shape[1] if encoder_hidden_states is None else encoder_hidden_states.shape[1]
+        )
+        if attention_mask is not None:
+            attention_mask = attn.prepare_attention_mask(
+                attention_mask, sequence_length, batch_size
+            )
+            attention_mask = attention_mask.view(
+                batch_size, attn.heads, -1, attention_mask.shape[-1]
+            )
+
+        if getattr(attn, "group_norm", None) is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
         if encoder_hidden_states is None:
             # Self-attention — don't capture, use standard path
             encoder_hidden_states = hidden_states
-
-        if attn.norm_cross is not None:
-            encoder_hidden_states = attn.norm_cross(encoder_hidden_states)
+        else:
+            encoder_hidden_states = self._normalize_encoder_hidden_states(
+                attn, encoder_hidden_states
+            )
 
         # Project Q, K, V
         query = attn.to_q(hidden_states)
@@ -215,32 +336,20 @@ class TACAAttnProcessor(nn.Module):
         key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
-        if attn.norm_q is not None:
+        if getattr(attn, "norm_q", None) is not None:
             query = attn.norm_q(query)
-        if attn.norm_k is not None:
+        if getattr(attn, "norm_k", None) is not None:
             key = attn.norm_k(key)
 
-        # Compute attention weights explicitly (cannot use F.scaled_dot_product_attention
-        # because we need the attention weight matrix)
-        scale = head_dim ** -0.5
-        attn_weights = torch.matmul(query, key.transpose(-2, -1)) * scale
-        # attn_weights: [B, heads, N, S]
+        if is_cross_attention:
+            self.a_tex_slice = self._compute_text_attention_slice(query, key, attention_mask)
 
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        attn_weights = attn_weights.softmax(dim=-1)
-
-        # TACA: Extract attention response for "text" token indices
-        if self.text_token_indices:
-            # attn_weights[:, :, :, text_indices] -> [B, heads, N, len(indices)]
-            # Average across the text token indices, keep per-head
-            a_sub = attn_weights[:, :, :, self.text_token_indices]  # [B, H, N, T]
-            a_sub = a_sub.mean(dim=-1)  # [B, H, N] — average over text tokens
-            self.a_tex_slice = a_sub.contiguous()  # Keep gradients for joint training
-
-        # Standard attention output
-        hidden_states = torch.matmul(attn_weights, value)
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+        )
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, inner_dim)
         hidden_states = hidden_states.to(query.dtype)
 
@@ -253,10 +362,10 @@ class TACAAttnProcessor(nn.Module):
             hidden_states = hidden_states.transpose(-1, -2).reshape(
                 batch_size, channel, height, width)
 
-        if attn.residual_connection:
+        if getattr(attn, "residual_connection", False):
             hidden_states = hidden_states + residual
 
-        hidden_states = hidden_states / attn.rescale_output_factor
+        hidden_states = hidden_states / getattr(attn, "rescale_output_factor", 1.0)
 
         return hidden_states
 
@@ -270,10 +379,21 @@ class TACAManager(nn.Module):
     then aggregates their captured attention maps after each forward pass.
     """
 
-    def __init__(self, unet, text_token_indices: List[int], latent_channels: int = 4):
+    def __init__(
+        self,
+        unet,
+        text_token_indices: List[int],
+        latent_channels: int = 4,
+        query_chunk_size: int = 1024,
+        use_checkpoint: bool = True,
+        detach_taca: bool = False,
+    ):
         super().__init__()
         self.text_token_indices = text_token_indices
         self.latent_channels = latent_channels
+        self.query_chunk_size = int(query_chunk_size) if query_chunk_size else 0
+        self.use_checkpoint = bool(use_checkpoint)
+        self.detach_taca = bool(detach_taca)
         self.processors: List[TACAAttnProcessor] = []
         self._num_heads_list: List[int] = []
 
@@ -284,7 +404,9 @@ class TACAManager(nn.Module):
         total_heads = sum(self._num_heads_list)
         self.proj_a = nn.Linear(total_heads, latent_channels)
         print(f"[TACA] Installed {len(self.processors)} TACA processors, "
-              f"total_heads={total_heads}, proj → {latent_channels}")
+              f"total_heads={total_heads}, proj → {latent_channels}, "
+              f"chunk={self.query_chunk_size or 'full'}, "
+              f"checkpoint={self.use_checkpoint}, detach={self.detach_taca}")
 
     def _install_processors(self, unet):
         """Replace attn2 (cross-attention) processors with TACAAttnProcessor."""
@@ -299,6 +421,9 @@ class TACAManager(nn.Module):
                     proc = TACAAttnProcessor(
                         text_token_indices=self.text_token_indices,
                         layer_id=layer_id,
+                        query_chunk_size=self.query_chunk_size,
+                        use_checkpoint=self.use_checkpoint,
+                        detach_taca=self.detach_taca,
                     )
                     self.processors.append(proc)
                     self._num_heads_list.append(num_heads)
@@ -427,7 +552,15 @@ class TADiSRWrapper(nn.Module):
     def __init__(self, pretrained_path: str = "Kwai-Kolors/Kolors-diffusers",
                  use_kolors: bool = True, latent_channels: int = 4,
                  context_dim: int = 4096, lora_rank: int = 16,
-                 precomputed_text_context_path: Optional[str] = None):
+                 precomputed_text_context_path: Optional[str] = None,
+                 jsd_dim: Optional[int] = None,
+                 gradient_checkpointing: bool = False,
+                 taca_query_chunk_size: int = 1024,
+                 taca_checkpoint: bool = True,
+                 taca_detach: bool = False,
+                 fail_on_lora_error: bool = True,
+                 require_precomputed_text_context: bool = False,
+                 torch_dtype: torch.dtype = torch.float32):
         super().__init__()
         self.latent_channels = latent_channels
         self.context_dim = context_dim
@@ -435,6 +568,14 @@ class TADiSRWrapper(nn.Module):
         self.precomputed_text_context = None
         self.precomputed_text_indices = None
         self.precomputed_text_context_path = precomputed_text_context_path
+        self.jsd_dim = jsd_dim
+        self.gradient_checkpointing = bool(gradient_checkpointing)
+        self.taca_query_chunk_size = int(taca_query_chunk_size) if taca_query_chunk_size else 0
+        self.taca_checkpoint = bool(taca_checkpoint)
+        self.taca_detach = bool(taca_detach)
+        self.fail_on_lora_error = bool(fail_on_lora_error)
+        self.require_precomputed_text_context = bool(require_precomputed_text_context)
+        self.torch_dtype = torch_dtype
 
         # --- Try loading real Kolors backbone ---
         self.vae = None
@@ -458,7 +599,12 @@ class TADiSRWrapper(nn.Module):
             latent_channels=latent_channels,
             lora_rank=lora_rank,
             lightweight=not self.use_real_backbone,
+            base_channels=jsd_dim,
+            gradient_checkpointing=self.gradient_checkpointing,
         )
+        self.assert_trainable_parameter_contract()
+        if self.gradient_checkpointing:
+            self.enable_gradient_checkpointing()
 
         # --- Noise schedule ---
         betas, alphas, alpha_cumprod = linear_beta_schedule(self.TOTAL_TIMESTEPS)
@@ -479,28 +625,43 @@ class TADiSRWrapper(nn.Module):
     def _try_init_kolors(self, pretrained_path, lora_rank):
         """Initialize with real Kolors backbone + LoRA."""
         # VAE
-        self.vae, lc = _try_load_kolors_vae(pretrained_path)
+        self.vae, lc = _try_load_kolors_vae(pretrained_path, torch_dtype=self.torch_dtype)
         if self.vae is None:
             return
         self.latent_channels = lc
 
         # UNet
-        self.unet_backbone = _try_load_kolors_unet(pretrained_path)
+        self.unet_backbone = _try_load_kolors_unet(pretrained_path, torch_dtype=self.torch_dtype)
         if self.unet_backbone is None:
             self.vae = None
             return
+        self.unet_backbone.requires_grad_(False)
 
         # Text encoder or offline precomputed prompt embedding
+        if self.require_precomputed_text_context and not self.precomputed_text_context_path:
+            self.vae = None
+            self.unet_backbone = None
+            raise RuntimeError(
+                "Real Kolors training requires precomputed_text_context_path when "
+                "require_precomputed_text_context=True."
+            )
         if self.precomputed_text_context_path:
             ok = self._load_precomputed_text_context(self.precomputed_text_context_path)
             if not ok:
                 self.vae = None
                 self.unet_backbone = None
+                if self.require_precomputed_text_context:
+                    raise RuntimeError(
+                        f"Failed to load required precomputed text context: "
+                        f"{self.precomputed_text_context_path}"
+                    )
                 return
             self._text_token_indices = self.precomputed_text_indices
             print("[TADiSR] ✓ Using precomputed text context; ChatGLM is not loaded.")
         else:
-            self.tokenizer, self.text_encoder = _try_load_kolors_text_encoder(pretrained_path)
+            self.tokenizer, self.text_encoder = _try_load_kolors_text_encoder(
+                pretrained_path, torch_dtype=self.torch_dtype
+            )
             if self.tokenizer is None:
                 self.vae = None
                 self.unet_backbone = None
@@ -514,6 +675,9 @@ class TADiSRWrapper(nn.Module):
             self.unet_backbone,
             text_token_indices=self._text_token_indices,
             latent_channels=self.latent_channels,
+            query_chunk_size=self.taca_query_chunk_size,
+            use_checkpoint=self.taca_checkpoint,
+            detach_taca=self.taca_detach,
         )
 
         # Apply LoRA to UNet cross-attention layers
@@ -523,6 +687,7 @@ class TADiSRWrapper(nn.Module):
         self.context_dim = self.unet_backbone.config.cross_attention_dim
 
         self.use_real_backbone = True
+        self.assert_trainable_parameter_contract()
         print(f"[TADiSR] ✓ Kolors backbone initialized with LoRA rank={lora_rank}")
 
 
@@ -633,6 +798,16 @@ class TADiSRWrapper(nn.Module):
                 )
 
             self.unet_backbone = get_peft_model(self.unet_backbone, lora_config)
+            trainable_names = [
+                name for name, param in self.unet_backbone.named_parameters()
+                if param.requires_grad
+            ]
+            bad = [name for name in trainable_names if "lora_" not in name]
+            if bad:
+                raise RuntimeError(
+                    "LoRA setup left non-LoRA UNet parameters trainable: "
+                    + ", ".join(bad[:10])
+                )
 
             # Report
             trainable = sum(p.numel() for p in self.unet_backbone.parameters()
@@ -642,7 +817,73 @@ class TADiSRWrapper(nn.Module):
                   f"params trainable ({100*trainable/total:.2f}%)")
             print(f"[TADiSR] Targeted {len(cross_attn_modules)} attn2 modules")
         except Exception as e:
-            print(f"[TADiSR] LoRA setup failed: {e}. UNet fully trainable as fallback.")
+            if self.fail_on_lora_error:
+                raise RuntimeError(f"LoRA setup failed; aborting to avoid full-UNet training: {e}") from e
+            print(f"[TADiSR] LoRA setup failed: {e}. UNet remains frozen.")
+
+    def enable_gradient_checkpointing(self):
+        """Enable checkpointing for supported real-backbone and custom modules."""
+        if self.use_real_backbone and self.unet_backbone is not None:
+            enable = getattr(self.unet_backbone, "enable_gradient_checkpointing", None)
+            if callable(enable):
+                enable()
+                print("[TADiSR] Enabled UNet gradient checkpointing")
+        if hasattr(self, "jsd"):
+            self.jsd.set_gradient_checkpointing(True)
+            print("[TADiSR] Enabled JSD gradient checkpointing")
+
+    def get_trainable_param_summary(self):
+        summary = {
+            "unet_lora": 0,
+            "jsd_img_lora": 0,
+            "jsd_seg_decoder": 0,
+            "jsd_cdib": 0,
+            "taca_projection": 0,
+            "fallback": 0,
+            "other": 0,
+        }
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            n = param.numel()
+            if name.startswith("unet_backbone") and "lora_" in name:
+                summary["unet_lora"] += n
+            elif name.startswith("jsd.img_decoder") and "lora_" in name:
+                summary["jsd_img_lora"] += n
+            elif name.startswith("jsd.seg_decoder"):
+                summary["jsd_seg_decoder"] += n
+            elif name.startswith("jsd.cdibs"):
+                summary["jsd_cdib"] += n
+            elif name.startswith("taca_manager.proj_a"):
+                summary["taca_projection"] += n
+            elif name.startswith("unet_fb") or name.startswith("vae_encoder_fb"):
+                summary["fallback"] += n
+            else:
+                summary["other"] += n
+        return summary
+
+    def assert_trainable_parameter_contract(self):
+        """Fail fast if the real-backbone path accidentally trains full frozen modules."""
+        if not self.use_real_backbone:
+            return
+        bad = []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            allowed = (
+                (name.startswith("unet_backbone") and "lora_" in name)
+                or (name.startswith("jsd.img_decoder") and "lora_" in name)
+                or name.startswith("jsd.seg_decoder")
+                or name.startswith("jsd.cdibs")
+                or name.startswith("taca_manager.proj_a")
+            )
+            if not allowed:
+                bad.append(name)
+        if bad:
+            raise RuntimeError(
+                "Unexpected trainable parameters in real-backbone mode: "
+                + ", ".join(bad[:20])
+            )
 
     def _find_text_token_indices(self) -> List[int]:
         """Tokenize the fixed prompt and find positions of 'text' token."""
@@ -700,7 +941,9 @@ class TADiSRWrapper(nn.Module):
         if self.use_real_backbone:
             with torch.no_grad():
                 if self.precomputed_text_context is not None:
-                    context = self.precomputed_text_context.to(device).expand(batch_size, -1, -1)
+                    context = self.precomputed_text_context.to(
+                        device=device, dtype=self.torch_dtype
+                    ).expand(batch_size, -1, -1)
                 else:
                     inputs = self.tokenizer(
                         self.FIXED_PROMPT,
@@ -715,7 +958,7 @@ class TADiSRWrapper(nn.Module):
                         outputs.last_hidden_state, source="text encoder output"
                     )
                     # Expand fixed-prompt context to current batch size
-                    context = context.expand(batch_size, -1, -1)
+                    context = context.to(dtype=self.torch_dtype).expand(batch_size, -1, -1)
             return context
         else:
             return self._fallback_context.expand(batch_size, -1, -1).to(device)
