@@ -116,15 +116,19 @@ def build_model_from_config(
     dtype: torch.dtype,
 ) -> TADiSRWrapper:
     use_kolors = bool(cfg.get("use_kolors", True))
+    if not use_kolors:
+        raise ValueError(
+            "Inference requires use_kolors=true. "
+            "The non-Kolors runtime has been removed from production code."
+        )
     context_path = precomputed_text_context_path or cfg.get("precomputed_text_context_path")
-    if use_kolors:
-        if not context_path:
-            raise ValueError(
-                "Real Kolors inference requires precomputed_text_context_path. "
-                "Pass --precomputed-text-context or set it in the config."
-            )
-        if not Path(context_path).is_file():
-            raise FileNotFoundError(f"Precomputed text context not found: {context_path}")
+    if not context_path:
+        raise ValueError(
+            "Real Kolors inference requires precomputed_text_context_path. "
+            "Pass --precomputed-text-context or set it in the config."
+        )
+    if not Path(context_path).is_file():
+        raise FileNotFoundError(f"Precomputed text context not found: {context_path}")
 
     model_kwargs = {
         "use_kolors": use_kolors,

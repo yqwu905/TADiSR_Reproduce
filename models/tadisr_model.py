@@ -109,66 +109,6 @@ def _try_load_kolors_text_encoder(
 
 
 # ---------------------------------------------------------------------------
-# Lightweight fallback components for CPU testing
-# ---------------------------------------------------------------------------
-class _FallbackVAEEncoder(nn.Module):
-    """Lightweight VAE encoder stub for CPU testing."""
-    def __init__(self, latent_channels: int = 4):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(3, 64, 3, padding=1), nn.SiLU(),
-            nn.Conv2d(64, 64, 3, stride=2, padding=1), nn.SiLU(),
-            nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.SiLU(),
-            nn.Conv2d(128, 128, 3, stride=2, padding=1), nn.SiLU(),
-            nn.Conv2d(128, latent_channels * 2, 3, padding=1),  # mean + logvar
-        )
-        self.latent_channels = latent_channels
-
-    def forward(self, x):
-        h = self.encoder(x)
-        mean, logvar = h.chunk(2, dim=1)
-        # Reparameterize (or just use mean for deterministic encoding)
-        return mean  # [B, latent_channels, H/8, W/8]
-
-
-class _FallbackVAEDecoder(nn.Module):
-    """Lightweight VAE decoder stub for CPU testing."""
-    def __init__(self, latent_channels: int = 4, out_channels: int = 3):
-        super().__init__()
-        self.decoder = nn.Sequential(
-            nn.Conv2d(latent_channels, 128, 3, padding=1), nn.SiLU(),
-            nn.ConvTranspose2d(128, 128, 4, 2, 1), nn.SiLU(),
-            nn.ConvTranspose2d(128, 64, 4, 2, 1), nn.SiLU(),
-            nn.ConvTranspose2d(64, 64, 4, 2, 1), nn.SiLU(),
-            nn.Conv2d(64, out_channels, 3, padding=1),
-        )
-
-    def forward(self, z):
-        return self.decoder(z)
-
-
-class _FallbackUNet(nn.Module):
-    """
-    Lightweight UNet with proper architecture for CPU testing.
-    Includes: down/up sampling, skip connections, timestep conditioning,
-    and multi-layer cross-attention with text-attention extraction.
-    """
-    def __init__(self, in_channels: int = 4, out_channels: int = 4,
-                 context_dim: int = 4096, base_dim: int = 64):
-        super().__init__()
-        from .kolors_unet_mod import LightweightTACAUNet
-        self.unet = LightweightTACAUNet(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            context_dim=context_dim,
-            base_dim=base_dim,
-        )
-
-    def forward(self, x, timesteps, context, text_token_indices=None):
-        return self.unet(x, timesteps, context, text_token_indices)
-
-
-# ---------------------------------------------------------------------------
 # TACA Custom Attention Processor for diffusers UNet  (Fix M1)
 # ---------------------------------------------------------------------------
 class TACAAttnProcessor(nn.Module):
@@ -571,6 +511,11 @@ class TADiSRWrapper(nn.Module):
                  require_precomputed_text_context: bool = False,
                  torch_dtype: torch.dtype = torch.float32):
         super().__init__()
+        if not use_kolors:
+            raise ValueError(
+                "TADiSRWrapper requires use_kolors=True. "
+                "The non-Kolors runtime has been removed from production code."
+            )
         self.latent_channels = latent_channels
         self.context_dim = context_dim
         self.use_real_backbone = False
@@ -594,20 +539,19 @@ class TADiSRWrapper(nn.Module):
         self._text_token_indices = None
         self.taca_manager = None  # Fix M1: TACA manager for real UNet
 
-        if use_kolors:
-            self._try_init_kolors(pretrained_path, lora_rank)
-
-        # --- Fallback to lightweight components for CPU testing ---
+        self._try_init_kolors(pretrained_path, lora_rank)
         if not self.use_real_backbone:
-            print("[TADiSR] Using lightweight fallback mode (CPU testing)")
-            self._init_fallback(latent_channels, context_dim)
+            raise RuntimeError(
+                "Failed to initialize the real Kolors backbone. "
+                "Check pretrained_path, diffusers/transformers dependencies, "
+                "and precomputed_text_context_path when required."
+            )
 
         # --- JSD (always custom, per paper) ---
         self.jsd = create_jsd(
-            vae=self.vae if self.use_real_backbone else None,
-            latent_channels=latent_channels,
+            vae=self.vae,
+            latent_channels=self.latent_channels,
             lora_rank=lora_rank,
-            lightweight=not self.use_real_backbone,
             base_channels=jsd_dim,
             gradient_checkpointing=self.gradient_checkpointing,
         )
@@ -848,7 +792,6 @@ class TADiSRWrapper(nn.Module):
             "jsd_seg_decoder": 0,
             "jsd_cdib": 0,
             "taca_projection": 0,
-            "fallback": 0,
             "other": 0,
         }
         for name, param in self.named_parameters():
@@ -865,16 +808,12 @@ class TADiSRWrapper(nn.Module):
                 summary["jsd_cdib"] += n
             elif name.startswith("taca_manager.proj_a"):
                 summary["taca_projection"] += n
-            elif name.startswith("unet_fb") or name.startswith("vae_encoder_fb"):
-                summary["fallback"] += n
             else:
                 summary["other"] += n
         return summary
 
     def assert_trainable_parameter_contract(self):
         """Fail fast if the real-backbone path accidentally trains full frozen modules."""
-        if not self.use_real_backbone:
-            return
         bad = []
         for name, param in self.named_parameters():
             if not param.requires_grad:
@@ -897,29 +836,14 @@ class TADiSRWrapper(nn.Module):
     def _find_text_token_indices(self) -> List[int]:
         """Tokenize the fixed prompt and find positions of 'text' token."""
         if self.tokenizer is None:
-            return [10]  # Fallback guess
+            raise RuntimeError("Tokenizer is required to locate fixed-prompt text tokens.")
         tokens = self.tokenizer.tokenize(self.FIXED_PROMPT)
         indices = [i for i, t in enumerate(tokens) if 'text' in t.lower()]
         if not indices:
-            indices = [len(tokens) - 1]  # Last token as fallback
+            indices = [len(tokens) - 1]
         print(f"[TADiSR] Prompt tokens: {tokens}")
         print(f"[TADiSR] 'text' token indices: {indices}")
         return indices
-
-    def _init_fallback(self, latent_channels, context_dim):
-        """Initialize lightweight fallback for CPU testing."""
-        self.vae_encoder_fb = _FallbackVAEEncoder(latent_channels)
-        self.unet_fb = _FallbackUNet(
-            in_channels=latent_channels,
-            out_channels=latent_channels,
-            context_dim=context_dim,
-        )
-        self._text_token_indices = [5]  # Placeholder
-        # Generate a fixed random context for testing
-        torch.manual_seed(42)
-        self._fallback_context = nn.Parameter(
-            torch.randn(1, 77, context_dim), requires_grad=False
-        )
 
     def _upsample_lr(self, x_L):
         """
@@ -936,69 +860,60 @@ class TADiSRWrapper(nn.Module):
 
     def _encode_image(self, x):
         """Encode image to latent space using VAE encoder."""
-        if self.use_real_backbone:
-            with torch.no_grad():
-                vae_dtype = next(self.vae.parameters()).dtype
-                vae_input = self._normalize_vae_input(x).to(dtype=vae_dtype)
-                latent_dist = self.vae.encode(vae_input).latent_dist
-                z = latent_dist.mean  # Deterministic encoding
-                z = z * self.vae.config.scaling_factor
-            return z
-        else:
-            return self.vae_encoder_fb(x)
+        with torch.no_grad():
+            vae_dtype = next(self.vae.parameters()).dtype
+            vae_input = self._normalize_vae_input(x).to(dtype=vae_dtype)
+            latent_dist = self.vae.encode(vae_input).latent_dist
+            z = latent_dist.mean  # Deterministic encoding
+            z = z * self.vae.config.scaling_factor
+        return z
 
     def _encode_text(self, batch_size, device):
         """Encode the fixed prompt using the text encoder."""
-        if self.use_real_backbone:
-            with torch.no_grad():
-                if self.precomputed_text_context is not None:
-                    context = self.precomputed_text_context.to(
-                        device=device, dtype=self.torch_dtype
-                    ).expand(batch_size, -1, -1)
-                else:
-                    inputs = self.tokenizer(
-                        self.FIXED_PROMPT,
-                        return_tensors="pt",
-                        padding="max_length",
-                        max_length=256,
-                        truncation=True,
-                    ).to(device)
-                    outputs = self.text_encoder(**inputs)
-                    # ChatGLM variants may output [S, B, C] or [B, S, C].
-                    context = self._normalize_single_prompt_context(
-                        outputs.last_hidden_state, source="text encoder output"
-                    )
-                    # Expand fixed-prompt context to current batch size
-                    context = context.to(dtype=self.torch_dtype).expand(batch_size, -1, -1)
-            return context
-        else:
-            return self._fallback_context.expand(batch_size, -1, -1).to(device)
+        with torch.no_grad():
+            if self.precomputed_text_context is not None:
+                context = self.precomputed_text_context.to(
+                    device=device, dtype=self.torch_dtype
+                ).expand(batch_size, -1, -1)
+            else:
+                inputs = self.tokenizer(
+                    self.FIXED_PROMPT,
+                    return_tensors="pt",
+                    padding="max_length",
+                    max_length=256,
+                    truncation=True,
+                ).to(device)
+                outputs = self.text_encoder(**inputs)
+                # ChatGLM variants may output [S, B, C] or [B, S, C].
+                context = self._normalize_single_prompt_context(
+                    outputs.last_hidden_state, source="text encoder output"
+                )
+                # Expand fixed-prompt context to current batch size
+                context = context.to(dtype=self.torch_dtype).expand(batch_size, -1, -1)
+        return context
 
     def _predict_noise(self, z_noisy, timesteps, context, text_token_indices):
         """UNet forward: predict noise and extract text attention maps."""
-        if self.use_real_backbone:
-            # Fix M1: Clear previous attention maps
-            self.taca_manager.clear()
+        # Fix M1: Clear previous attention maps
+        self.taca_manager.clear()
 
-            added_cond_kwargs = self._build_unet_added_cond_kwargs(
-                context=context,
-                batch_size=z_noisy.shape[0],
-                device=z_noisy.device,
-                dtype=z_noisy.dtype,
-            )
+        added_cond_kwargs = self._build_unet_added_cond_kwargs(
+            context=context,
+            batch_size=z_noisy.shape[0],
+            device=z_noisy.device,
+            dtype=z_noisy.dtype,
+        )
 
-            # Forward through UNet — TACA processors capture attention maps
-            noise_pred = self.unet_backbone(
-                z_noisy, timesteps,
-                encoder_hidden_states=context,
-                added_cond_kwargs=added_cond_kwargs,
-            ).sample
+        # Forward through UNet — TACA processors capture attention maps
+        noise_pred = self.unet_backbone(
+            z_noisy, timesteps,
+            encoder_hidden_states=context,
+            added_cond_kwargs=added_cond_kwargs,
+        ).sample
 
-            # Fix M1: Aggregate attention maps from all M cross-attention layers
-            a_tex = self.taca_manager.aggregate_attention(z_noisy.shape)
-            return noise_pred, a_tex
-        else:
-            return self.unet_fb(z_noisy, timesteps, context, text_token_indices)
+        # Fix M1: Aggregate attention maps from all M cross-attention layers
+        a_tex = self.taca_manager.aggregate_attention(z_noisy.shape)
+        return noise_pred, a_tex
 
     def _build_unet_added_cond_kwargs(self, context, batch_size, device, dtype):
         """Build added_cond_kwargs required by some Kolors UNet variants.
@@ -1067,8 +982,7 @@ class TADiSRWrapper(nn.Module):
                      Ignored when use_real_backbone=True (model encodes
                      the fixed prompt internally via ChatGLM).
             text_token_indices: list[int], positions of "text" token
-            return_debug: if True, also return lightweight intermediate
-                          tensors for visualization.
+            return_debug: if True, also return intermediate tensors for visualization.
 
         Returns:
             x_hr_pred:   predicted HR image [B, 3, H', W']
@@ -1087,10 +1001,7 @@ class TADiSRWrapper(nn.Module):
         # model's own text encoder (ChatGLM) to encode the fixed prompt.
         # The Dataset provides a placeholder random context which is
         # incorrect for real training — ignore it.
-        if self.use_real_backbone:
-            context = self._encode_text(B, device)
-        elif context is None:
-            context = self._encode_text(B, device)
+        context = self._encode_text(B, device)
 
         # Fix M4: Upsample LR to HR resolution before VAE encoding
         x_L_up = self._upsample_lr(x_L)
@@ -1115,8 +1026,7 @@ class TADiSRWrapper(nn.Module):
 
         # 6. JSD: decode to image + segmentation mask
         x_hr_pred, s_mask_pred = self.jsd(z_H, a_tex)
-        if self.use_real_backbone:
-            x_hr_pred = self._denormalize_vae_output(x_hr_pred)
+        x_hr_pred = self._denormalize_vae_output(x_hr_pred)
 
         if return_debug:
             return x_hr_pred, s_mask_pred, {
@@ -1132,13 +1042,9 @@ class TADiSRWrapper(nn.Module):
         Everything else (VAE encoder, text encoder) is frozen.
         """
         params = list(self.jsd.parameters())
-        if self.use_real_backbone:
-            # Only LoRA params from UNet
-            params += [p for p in self.unet_backbone.parameters() if p.requires_grad]
-            # TACA W_a projection
-            if self.taca_manager is not None:
-                params += list(self.taca_manager.parameters())
-        else:
-            params += list(self.unet_fb.parameters())
-            params += list(self.vae_encoder_fb.parameters())
+        # Only LoRA params from UNet
+        params += [p for p in self.unet_backbone.parameters() if p.requires_grad]
+        # TACA W_a projection
+        if self.taca_manager is not None:
+            params += list(self.taca_manager.parameters())
         return params

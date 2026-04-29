@@ -2,7 +2,7 @@ ftsr_dir: dataset/FTSR
 realce_dir:
 use_kolors: true
 context_dim: 4096
-jsd_dim: null  # null keeps lightweight fallback width for CPU smoke tests
+jsd_dim: 128
 lora_rank: 16
 precomputed_text_context_path: null  # e.g. assets/fixed_prompt_context.pt
 device: cpu

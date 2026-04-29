@@ -17,12 +17,13 @@ Tests verify:
 """
 import sys
 import os
-import subprocess
 import tempfile
 import torch
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from test_helpers import TestTACAUNet, TestTADiSRWrapper
 
 
 def test_noise_schedule():
@@ -75,14 +76,12 @@ def test_taca_unet():
     print("TEST: TACA UNet Architecture")
     print("=" * 60)
 
-    from models.kolors_unet_mod import LightweightTACAUNet
-
     B, C, H, W = 2, 4, 16, 16
     context_dim = 4096
     seq_len = 77
     num_heads = 4
 
-    unet = LightweightTACAUNet(
+    unet = TestTACAUNet(
         in_channels=C, out_channels=C,
         context_dim=context_dim, base_dim=64,
         num_heads=num_heads, dim_head=32,
@@ -180,10 +179,9 @@ def test_jsd():
     in_channels = 4
     B, H, W = 2, 8, 8  # Latent spatial dim
 
-    # Use lightweight config for fast testing
     jsd = create_jsd(
         vae=None, latent_channels=in_channels,
-        lora_rank=4, lightweight=True,
+        lora_rank=4, base_channels=32,
     )
 
     z_H = torch.randn(B, in_channels, H, W)
@@ -308,9 +306,7 @@ def test_lr_upsample():
     print("TEST: LR Upsample Before VAE (Fix M4)")
     print("=" * 60)
 
-    from models.tadisr_model import TADiSRWrapper
-
-    model = TADiSRWrapper(use_kolors=False, context_dim=4096)
+    model = TestTADiSRWrapper(context_dim=4096)
 
     # Test _upsample_lr
     x_L = torch.rand(2, 3, 32, 32)
@@ -326,19 +322,33 @@ def test_lr_upsample():
     print()
 
 
-def test_full_model_forward():
-    """Test full TADiSR model forward pass (fallback mode)."""
+def test_production_wrapper_rejects_non_kolors():
+    """Test production model no longer exposes a non-Kolors runtime."""
     print("=" * 60)
-    print("TEST: Full TADiSR Model Forward Pass")
+    print("TEST: Production Wrapper Rejects Non-Kolors Runtime")
     print("=" * 60)
 
     from models.tadisr_model import TADiSRWrapper
 
+    try:
+        TADiSRWrapper(use_kolors=False)
+    except ValueError as exc:
+        assert "use_kolors=True" in str(exc)
+    else:
+        raise AssertionError("Expected TADiSRWrapper(use_kolors=False) to fail")
+
+    print("  ✓ TADiSRWrapper(use_kolors=False) is rejected")
+    print()
+
+
+def test_full_model_forward():
+    """Test full TADiSR model forward pass with test-local substitutes."""
+    print("=" * 60)
+    print("TEST: Full TADiSR Model Forward Pass")
+    print("=" * 60)
+
     B = 2
-    model = TADiSRWrapper(
-        use_kolors=False,  # Use lightweight fallback
-        context_dim=4096,
-    )
+    model = TestTADiSRWrapper(context_dim=4096)
 
     x_L = torch.rand(B, 3, 128, 128)
     context = torch.randn(B, 77, 4096)
@@ -387,7 +397,6 @@ def test_tensorboard_visual_debug_helpers():
     print("=" * 60)
 
     from types import SimpleNamespace
-    from models.tadisr_model import TADiSRWrapper
     from train import _NullSummaryWriter, _log_tensorboard_images, _prepare_taca_heatmap
 
     class CapturingWriter(_NullSummaryWriter):
@@ -401,8 +410,7 @@ def test_tensorboard_visual_debug_helpers():
             assert img_tensor.min() >= 0.0 and img_tensor.max() <= 1.0, \
                 f"{tag} should be normalized to [0,1]"
 
-    model = TADiSRWrapper(
-        use_kolors=False,
+    model = TestTADiSRWrapper(
         context_dim=128,
         jsd_dim=16,
         lora_rank=2,
@@ -470,14 +478,10 @@ def test_training_loop():
     print("TEST: Training Loop (3 steps)")
     print("=" * 60)
 
-    from models.tadisr_model import TADiSRWrapper
     from losses.composite_loss import CompositeTADiSRLoss
 
     B = 2
-    model = TADiSRWrapper(
-        use_kolors=False,
-        context_dim=4096,
-    )
+    model = TestTADiSRWrapper(context_dim=4096)
 
     criterion = CompositeTADiSRLoss()
 
@@ -522,10 +526,9 @@ def test_checkpoint_save():
     print("TEST: Checkpoint Save Logic (Fix T2)")
     print("=" * 60)
 
-    from models.tadisr_model import TADiSRWrapper
     from train import _checkpoint_trainable_state_dict
 
-    model = TADiSRWrapper(use_kolors=False, context_dim=4096)
+    model = TestTADiSRWrapper(context_dim=4096)
     trainable_params = model.get_trainable_params()
 
     # Fix T2: Verify that parameter filtering by name works correctly
@@ -554,7 +557,6 @@ def _make_checkpoint_test_args(ckpt_dir):
     from types import SimpleNamespace
 
     return SimpleNamespace(
-        use_kolors=False,
         context_dim=128,
         jsd_dim=16,
         lora_rank=2,
@@ -573,10 +575,7 @@ def _make_checkpoint_test_args(ckpt_dir):
 
 
 def _make_checkpoint_test_model():
-    from models.tadisr_model import TADiSRWrapper
-
-    return TADiSRWrapper(
-        use_kolors=False,
+    return TestTADiSRWrapper(
         context_dim=128,
         jsd_dim=16,
         lora_rank=2,
@@ -792,86 +791,29 @@ def test_inference_pad_crop_helpers():
     print()
 
 
-def test_inference_cli_smoke():
-    """Smoke test infer.py with lightweight fallback model, image IO, SR, and mask output."""
+def test_inference_rejects_non_kolors_config():
+    """Test infer.py rejects non-Kolors configs before model construction."""
     print("=" * 60)
-    print("TEST: Inference CLI Smoke")
+    print("TEST: Inference Rejects Non-Kolors Config")
     print("=" * 60)
 
-    from PIL import Image
-    from train import CHECKPOINT_VERSION
+    from infer import build_model_from_config
 
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with tempfile.TemporaryDirectory() as tmpdir:
-        cfg_path = os.path.join(tmpdir, "infer_cpu.yaml")
-        ckpt_path = os.path.join(tmpdir, "fallback.pt")
-        input_path = os.path.join(tmpdir, "odd_input.png")
-        output_dir = os.path.join(tmpdir, "outputs")
-
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            f.write(
-                "\n".join(
-                    [
-                        "use_kolors: false",
-                        "context_dim: 128",
-                        "jsd_dim: 16",
-                        "lora_rank: 2",
-                        "taca_query_chunk_size: 64",
-                        "taca_checkpoint: false",
-                        "taca_detach: false",
-                        "fail_on_lora_error: true",
-                    ]
-                )
+        ckpt_path = os.path.join(tmpdir, "placeholder.pt")
+        try:
+            build_model_from_config(
+                {"use_kolors": False},
+                checkpoint_path=ckpt_path,
+                device=torch.device("cpu"),
+                dtype=torch.float32,
             )
+        except ValueError as exc:
+            assert "use_kolors=true" in str(exc)
+        else:
+            raise AssertionError("Expected non-Kolors inference config to be rejected")
 
-        model = _make_checkpoint_test_model()
-        torch.save(
-            {
-                "checkpoint_version": CHECKPOINT_VERSION,
-                "step": 1,
-                "model_state_dict": model.state_dict(),
-            },
-            ckpt_path,
-        )
-
-        image = (np.random.rand(17, 19, 3) * 255.0).astype(np.uint8)
-        Image.fromarray(image).save(input_path)
-
-        cmd = [
-            sys.executable,
-            os.path.join(repo_root, "infer.py"),
-            "--config",
-            cfg_path,
-            "--checkpoint",
-            ckpt_path,
-            "--input",
-            input_path,
-            "--output",
-            output_dir,
-            "--device",
-            "cpu",
-            "--precision",
-            "fp32",
-            "--save-mask",
-        ]
-        result = subprocess.run(
-            cmd,
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-
-        sr_path = os.path.join(output_dir, "odd_input_sr.png")
-        mask_path = os.path.join(output_dir, "odd_input_mask.png")
-        assert os.path.isfile(sr_path), result.stdout + result.stderr
-        assert os.path.isfile(mask_path), result.stdout + result.stderr
-        assert Image.open(sr_path).size == (76, 68)
-        assert Image.open(mask_path).size == (76, 68)
-
-    print("  ✓ infer.py writes SR and mask outputs")
-    print("  ✓ CLI output size matches original odd input dimensions ×4")
+    print("  ✓ use_kolors=false is rejected before checkpoint/model loading")
     print()
 
 
@@ -1122,16 +1064,16 @@ def test_jsd_dim_controls_channels():
     from models.vae_jsd import create_jsd
 
     small = create_jsd(vae=None, latent_channels=4, lora_rank=4, base_channels=16)
-    default = create_jsd(vae=None, latent_channels=4, lora_rank=4, lightweight=True)
+    larger = create_jsd(vae=None, latent_channels=4, lora_rank=4, base_channels=32)
 
     assert tuple(small.img_decoder.block_out_channels) == (16, 32, 64, 64), \
         f"Unexpected jsd_dim channels: {small.img_decoder.block_out_channels}"
     small_params = sum(p.numel() for p in small.parameters())
-    default_params = sum(p.numel() for p in default.parameters())
-    assert small_params < default_params, "Smaller jsd_dim should reduce parameter count"
+    larger_params = sum(p.numel() for p in larger.parameters())
+    assert small_params < larger_params, "Smaller jsd_dim should reduce parameter count"
 
     print(f"  ✓ jsd_dim=16 → {small.img_decoder.block_out_channels}")
-    print(f"  ✓ Parameter count decreases: {small_params:,} < {default_params:,}")
+    print(f"  ✓ Parameter count decreases: {small_params:,} < {larger_params:,}")
     print()
 
 
@@ -1304,6 +1246,7 @@ def run_all_tests():
         ("JSD Architecture", test_jsd),
         ("Loss Functions", test_losses),
         ("LR Upsample (Fix M4)", test_lr_upsample),
+        ("Reject Non-Kolors Runtime", test_production_wrapper_rejects_non_kolors),
         ("TACA AttnProcessor (Fix M1)", test_taca_attn_processor),
         ("Chunked TACA Attention Equivalence", test_taca_chunked_attention_equivalence_and_grad),
         ("LoRA Failure Is Fatal", test_lora_failure_is_fatal),
@@ -1320,7 +1263,7 @@ def run_all_tests():
         ("Legacy Checkpoint Resume Compatibility", test_legacy_checkpoint_resume_compatibility),
         ("Inference Checkpoint Load", test_inference_checkpoint_load),
         ("Inference Pad/Crop Helpers", test_inference_pad_crop_helpers),
-        ("Inference CLI Smoke", test_inference_cli_smoke),
+        ("Inference Rejects Non-Kolors Config", test_inference_rejects_non_kolors_config),
         ("Degradation Pipeline", test_degradation_pipeline),
         ("Dataset & Collate", test_dataset),
     ]

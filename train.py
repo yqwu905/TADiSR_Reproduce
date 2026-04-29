@@ -480,7 +480,7 @@ def _checkpoint_config_summary(args):
 
 
 def _checkpoint_trainable_state_dict(raw_model, trainable_params):
-    """Return the lightweight checkpoint payload for LoRA/JSD/TACA training."""
+    """Return the compact checkpoint payload for LoRA/JSD/TACA training."""
     trainable_ids = {id(p) for p in trainable_params}
     save_keys = set()
     for name, param in raw_model.named_parameters():
@@ -640,7 +640,7 @@ def load_training_checkpoint(
         if load_result.missing_keys:
             print(
                 f"  Resume note: {len(load_result.missing_keys)} missing model keys "
-                "(expected for lightweight ckpts)."
+                "(expected for compact trainable-only checkpoints)."
             )
         if load_result.unexpected_keys:
             print(f"  Resume note: {len(load_result.unexpected_keys)} unexpected model keys.")
@@ -714,30 +714,17 @@ def create_datasets(args):
         print(f"[Data] Real-CE not found at {args.realce_dir} (optional)")
 
     if not datasets:
-        print("[Data] No real data found. Using dummy dataset for testing.")
-        return _create_dummy_dataset(args)
+        searched = [f"FTSR={args.ftsr_dir}"]
+        if args.realce_dir:
+            searched.append(f"Real-CE={args.realce_dir}")
+        raise FileNotFoundError(
+            "No training data found. Prepare FTSR and optionally Real-CE before "
+            "starting training; searched " + ", ".join(searched)
+        )
 
     if len(datasets) > 1:
         return ConcatDataset(datasets)
     return datasets[0]
-
-
-def _create_dummy_dataset(args):
-    """Dummy dataset for local CPU testing."""
-    class DummyDataset(torch.utils.data.Dataset):
-        def __len__(self):
-            return 8
-
-        def __getitem__(self, idx):
-            return {
-                "lr": torch.rand(3, 128, 128),
-                "hr": torch.rand(3, 512, 512),
-                "mask": torch.rand(1, 512, 512),
-                "context": torch.rand(77, args.context_dim),
-                "text_indices": [5],
-                "filename": f"dummy_{idx:04d}.png",
-            }
-    return DummyDataset()
 
 
 def setup_distributed(args):
@@ -836,7 +823,7 @@ def train(args):
         shuffle=shuffle,
         sampler=sampler,
         collate_fn=tadisr_collate_fn,
-        num_workers=0,  # For CPU testing
+        num_workers=0,
         drop_last=True,
     )
 

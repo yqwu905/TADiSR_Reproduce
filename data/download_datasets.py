@@ -97,27 +97,13 @@ def download_lsdir_subset(output_dir: Path, num_images: int = 1000):
 
     except Exception as e:
         print(f"[LSDIR] HuggingFace download failed: {e}")
-        print(f"[LSDIR] Falling back to downloading high-quality images from Unsplash...")
-        _download_fallback_backgrounds(lsdir_dir, num_images)
+        raise RuntimeError(
+            "Failed to download LSDIR backgrounds from HuggingFace. "
+            "Download the dataset manually from https://huggingface.co/datasets/ofsoundof/LSDIR "
+            f"and place images under {lsdir_dir}."
+        ) from e
 
     return lsdir_dir
-
-
-def _download_fallback_backgrounds(output_dir: Path, count: int):
-    """Fallback: download high-quality 1024px images from Lorem Picsum."""
-    import requests
-    from tqdm import tqdm
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    existing = list(output_dir.glob("*.jpg"))
-
-    for i in tqdm(range(len(existing), count), desc="Downloading backgrounds"):
-        try:
-            resp = requests.get(f"https://picsum.photos/1024/1024", timeout=30)
-            if resp.status_code == 200:
-                (output_dir / f"bg_{i:05d}.jpg").write_bytes(resp.content)
-        except Exception:
-            continue
 
 
 def download_hisam_weights(output_dir: Path):

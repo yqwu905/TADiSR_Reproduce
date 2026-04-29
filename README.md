@@ -53,7 +53,6 @@ pip install -r requirements.txt
 |------|------|
 | **论文配置** | 4× NVIDIA H20 GPU (96GB)，batch_size=1/GPU |
 | **最低配置** | 1× NVIDIA A100/A800 (80GB)，加载完整 Kolors 骨干约需 ~40GB |
-| **调试模式** | CPU 可运行（使用轻量级 fallback 组件，不加载 Kolors） |
 
 ---
 
@@ -63,15 +62,13 @@ pip install -r requirements.txt
 TADiSR_Reproduce/
 ├── models/
 │   ├── tadisr_model.py       # 主模型封装：VAE + UNet + TACA + JSD
-│   ├── vae_jsd.py            # Joint Segmentation Decoders (JSD) + CDIB
-│   └── kolors_unet_mod.py    # 轻量级 TACA UNet（CPU 调试用）
+│   └── vae_jsd.py            # Joint Segmentation Decoders (JSD) + CDIB
 ├── losses/
 │   ├── __init__.py
 │   └── composite_loss.py     # 复合损失：MFL + LPIPS + MSE + Focal + Dice
 ├── data/
 │   ├── download_datasets.py  # 数据集下载脚本
 │   ├── build_ftsr.py         # FTSR 数据集构造主管线
-│   ├── build_dataset.py      # 简化版构造管线
 │   ├── text_segmentation.py  # Hi-SAM 文本分割
 │   ├── ocr_filter.py         # OCR 一致性过滤
 │   ├── degradation.py        # Real-ESRGAN 两阶段降质
@@ -389,21 +386,7 @@ Final:   sinc 滤波 → 缩放到目标 LR 尺寸 → 可选 JPEG 压缩
 - 广义高斯 (15%)
 - 平台核 (15%)
 
-### 5.4 简化版构造管线
-
-如果你已经有分割好的前景和 mask，可以使用简化版：
-
-```bash
-python data/build_dataset.py \
-  --fg_dir raw_data/verified_foregrounds \
-  --mask_dir raw_data/verified_masks \
-  --bg_dir raw_data/backgrounds \
-  --output_dir dataset/FTSR \
-  --num_samples 1000 \
-  --sf 4
-```
-
-### 5.5 构造完成后的数据结构
+### 5.4 构造完成后的数据结构
 
 ```
 dataset/FTSR/
@@ -546,23 +529,7 @@ python infer.py \
 
 如果 LR 图片宽高不是模型兼容的偶数尺寸，脚本会先复制边界 padding（默认 pad 到 16 的倍数），推理后再裁回原始尺寸的 4× 输出，保证最终 SR/mask 尺寸为 `H*4 × W*4`。
 
-### 6.4 CPU 调试模式
-
-不加载 Kolors 骨干，使用轻量级替代组件：
-
-```bash
-cp configs/train/default.yaml configs/train/cpu_debug.yaml
-# 按需修改 cpu_debug.yaml，例如 batch_size/max_iters/save_every
-python train.py --config configs/train/cpu_debug.yaml
-```
-
-此模式下：
-- VAE 编码器 → 4 层卷积 lightweight stub
-- UNet → 2 层 down/up + skip + TACA 的轻量 UNet
-- 文本上下文 → 随机固定张量
-- JSD → 使用 `[32, 64, 128, 128]` 小通道配置
-
-### 6.5 多 GPU 分布式训练
+### 6.4 多 GPU 分布式训练
 
 使用 PyTorch `torchrun` 进行分布式训练：
 
@@ -773,7 +740,7 @@ huggingface-cli download --resume-download Kwai-Kolors/Kolors-diffusers --local-
 ### Q3: 如何只用 FTSR 数据训练（不用 Real-CE）？
 
 ```bash
-python train.py --use_kolors --ftsr_dir dataset/FTSR --device cuda
+python train.py --config configs/train/kolors.yaml
 # Real-CE 路径不存在时自动跳过
 ```
 
@@ -792,26 +759,16 @@ for k, v in sample.items():
 "
 ```
 
-### Q5: CPU 调试模式和 GPU 训练模式的区别？
-
-| 特性 | CPU 调试模式 | GPU 完整模式 |
-|------|-------------|-------------|
-| VAE | 4 层轻量 Conv | Kolors AutoencoderKL |
-| UNet | 2 层 lightweight TACA UNet | Kolors UNet2DConditionModel + LoRA |
-| 文本编码 | 随机固定张量 | ChatGLM 编码固定提示词 |
-| JSD 通道 | [32, 64, 128, 128] | [128, 256, 512, 512] |
-| 参数量 | ~2M | ~18GB |
-
-### Q6: 如何适配昇腾 `torch_npu` 训练？
+### Q5: 如何适配昇腾 `torch_npu` 训练？
 
 先安装昇腾 PyTorch 运行时（`torch_npu`），然后启动时将设备设置为 `npu`：
 
 ```bash
 # 单卡
-python train.py --use_kolors --ftsr_dir dataset/FTSR --device npu
+python train.py --config configs/train/kolors.yaml
 
 # 多卡（示例：8 卡）
-torchrun --nproc_per_node=8 train.py --use_kolors --ftsr_dir dataset/FTSR --device npu
+torchrun --nproc_per_node=8 train.py --config configs/train/kolors.yaml
 ```
 
 当前 `train.py` 会自动：

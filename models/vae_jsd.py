@@ -622,7 +622,7 @@ class JointSegmentationDecoders(nn.Module):
 # Factory function
 # ---------------------------------------------------------------------------
 def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
-               latent_channels=4, lora_rank=16, lightweight=False,
+               latent_channels=4, lora_rank=16,
                base_channels=None, gradient_checkpointing: bool = False):
     """Create JSD, optionally loading from a Kolors VAE.
 
@@ -634,7 +634,6 @@ def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
         layers_per_block: Override. Default from VAE or 2.
         latent_channels: Latent channel count. Default 4.
         lora_rank: LoRA adapter rank. Default 16.
-        lightweight: If True and no VAE, use smaller [32, 64, 128, 128] config.
         base_channels: Optional first decoder channel. If set, uses
             [base, 2*base, 4*base, 4*base] to make jsd_dim effective.
     """
@@ -658,12 +657,8 @@ def create_jsd(vae=None, block_out_channels=None, layers_per_block=None,
         nng = cfg.get("norm_num_groups", 32)
         latent_scaling_factor = cfg.get("scaling_factor", 1.0)
     else:
-        if lightweight:
-            boc = block_out_channels or [32, 64, 128, 128]
-            lpb = layers_per_block if layers_per_block is not None else 1
-        else:
-            boc = block_out_channels or [128, 256, 512, 512]
-            lpb = layers_per_block if layers_per_block is not None else 2
+        boc = block_out_channels or [128, 256, 512, 512]
+        lpb = layers_per_block if layers_per_block is not None else 2
         lch = latent_channels
         nng = 32
         latent_scaling_factor = 1.0
