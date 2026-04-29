@@ -444,6 +444,8 @@ def train(args):
     ):
         fsdp_checkpoint_targets = _apply_fsdp_activation_checkpointing(model)
 
+
+    model = model.to(precision_dtype)
     if ddp_state["distributed"]:
         if dist_strategy == "ddp":
             model = DDP(
@@ -459,7 +461,6 @@ def train(args):
                     "FSDP requires accelerator device in this project "
                     f"(cuda/npu), got device={device.type}."
                 )
-            model = model.to(precision_dtype)
             model = FSDP(
                 model,
                 device_id=fsdp_device_id,

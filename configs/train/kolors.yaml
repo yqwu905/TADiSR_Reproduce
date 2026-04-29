@@ -6,7 +6,7 @@ jsd_dim: 128
 lora_rank: 16
 device: npu
 batch_size: 1
-dist_strategy: fsdp  # ddp | fsdp
+dist_strategy: ddp  # ddp | fsdp
 lr: 0.00005
 grad_clip: 1.0
 warmup_iters: 0
@@ -17,4 +17,4 @@ save_every: 5000
 ckpt_dir: checkpoints
 tensorboard_log_dir: checkpoints/tensorboard
 precomputed_text_context_path: embedding.pt
-gradient_checkpointing: false  # Trade compute for memory on UNet + JSD
+gradient_checkpointing: true  # Trade compute for memory on UNet + JSD
