@@ -215,6 +215,185 @@ def crop_sr_to_original(tensor: torch.Tensor, original_lr_size: tuple[int, int],
     return tensor[..., : h * scale, : w * scale]
 
 
+def validate_tile_args(tile_size: int, tile_overlap: int) -> tuple[int, int]:
+    tile_size = int(tile_size or 0)
+    tile_overlap = int(tile_overlap or 0)
+    if tile_size < 0:
+        raise ValueError("--tile-size must be >= 0")
+    if tile_overlap < 0:
+        raise ValueError("--tile-overlap must be >= 0")
+    if tile_size == 0:
+        return tile_size, tile_overlap
+    if tile_size < LR_PAD_MULTIPLE:
+        raise ValueError(f"--tile-size must be at least {LR_PAD_MULTIPLE} LR pixels")
+    if tile_size % LR_PAD_MULTIPLE != 0:
+        raise ValueError(f"--tile-size must be a multiple of {LR_PAD_MULTIPLE}")
+    if tile_overlap >= tile_size:
+        raise ValueError("--tile-overlap must be smaller than --tile-size")
+    return tile_size, tile_overlap
+
+
+def tile_starts(length: int, tile_size: int, tile_overlap: int) -> list[int]:
+    if length <= 0:
+        raise ValueError(f"Invalid image dimension: {length}")
+    if tile_size <= 0 or length <= tile_size:
+        return [0]
+
+    stride = tile_size - tile_overlap
+    starts = list(range(0, length - tile_size + 1, stride))
+    last = length - tile_size
+    if starts[-1] != last:
+        starts.append(last)
+    return starts
+
+
+def iter_tile_regions(
+    height: int,
+    width: int,
+    *,
+    tile_size: int,
+    tile_overlap: int,
+) -> list[tuple[int, int, int, int]]:
+    tile_size, tile_overlap = validate_tile_args(tile_size, tile_overlap)
+    if tile_size <= 0:
+        return [(0, height, 0, width)]
+
+    y_starts = tile_starts(height, tile_size, tile_overlap)
+    x_starts = tile_starts(width, tile_size, tile_overlap)
+    return [
+        (y0, min(y0 + tile_size, height), x0, min(x0 + tile_size, width))
+        for y0 in y_starts
+        for x0 in x_starts
+    ]
+
+
+def _edge_ramp(length: int, *, ascending: bool, device: torch.device) -> torch.Tensor:
+    if length <= 0:
+        return torch.empty(0, device=device)
+    ramp = torch.linspace(0.0, 1.0, steps=length + 2, device=device)[1:-1]
+    return ramp if ascending else ramp.flip(0)
+
+
+def build_tile_blend_weight(
+    *,
+    output_height: int,
+    output_width: int,
+    region: tuple[int, int, int, int],
+    full_lr_size: tuple[int, int],
+    tile_overlap: int,
+    scale: int,
+    device: torch.device,
+) -> torch.Tensor:
+    y0, y1, x0, x1 = region
+    full_h, full_w = full_lr_size
+    weight_y = torch.ones(output_height, device=device)
+    weight_x = torch.ones(output_width, device=device)
+    overlap = max(0, int(tile_overlap)) * int(scale)
+
+    if overlap > 0:
+        top = min(overlap, output_height)
+        left = min(overlap, output_width)
+        bottom = min(overlap, output_height)
+        right = min(overlap, output_width)
+        if y0 > 0:
+            weight_y[:top] = _edge_ramp(top, ascending=True, device=device)
+        if y1 < full_h:
+            weight_y[-bottom:] = torch.minimum(
+                weight_y[-bottom:],
+                _edge_ramp(bottom, ascending=False, device=device),
+            )
+        if x0 > 0:
+            weight_x[:left] = _edge_ramp(left, ascending=True, device=device)
+        if x1 < full_w:
+            weight_x[-right:] = torch.minimum(
+                weight_x[-right:],
+                _edge_ramp(right, ascending=False, device=device),
+            )
+
+    return weight_y.view(1, 1, output_height, 1) * weight_x.view(1, 1, 1, output_width)
+
+
+def _forward_model(
+    model: TADiSRWrapper,
+    lr: torch.Tensor,
+    *,
+    save_debug: bool,
+) -> tuple[torch.Tensor, torch.Tensor, dict | None]:
+    with torch.inference_mode():
+        output = model(lr, return_debug=save_debug)
+
+    if save_debug:
+        sr, mask, debug = output
+    else:
+        sr, mask = output
+        debug = None
+    return sr, mask, debug
+
+
+def run_tiled_model_inference(
+    model: TADiSRWrapper,
+    lr: torch.Tensor,
+    *,
+    device: torch.device,
+    save_debug: bool,
+    tile_size: int,
+    tile_overlap: int,
+) -> tuple[torch.Tensor, torch.Tensor, dict | None]:
+    tile_size, tile_overlap = validate_tile_args(tile_size, tile_overlap)
+    if lr.ndim != 4 or lr.shape[0] != 1:
+        raise ValueError(f"Tiled inference expects one BCHW image, got shape {tuple(lr.shape)}")
+
+    scale = int(getattr(model, "SR_SCALE", 4))
+    _, channels, lr_h, lr_w = lr.shape
+    regions = iter_tile_regions(lr_h, lr_w, tile_size=tile_size, tile_overlap=tile_overlap)
+    out_h, out_w = lr_h * scale, lr_w * scale
+    acc_device = torch.device("cpu")
+    sr_accum = torch.zeros((1, channels, out_h, out_w), dtype=torch.float32, device=acc_device)
+    mask_accum = torch.zeros((1, 1, out_h, out_w), dtype=torch.float32, device=acc_device)
+    debug_accum = torch.zeros((1, 3, out_h, out_w), dtype=torch.float32, device=acc_device) if save_debug else None
+    weight_accum = torch.zeros((1, 1, out_h, out_w), dtype=torch.float32, device=acc_device)
+
+    for idx, region in enumerate(regions, start=1):
+        y0, y1, x0, x1 = region
+        tile = lr[..., y0:y1, x0:x1].to(device)
+        sr_tile, mask_tile, debug_tile = _forward_model(model, tile, save_debug=save_debug)
+        tile_lr_size = (y1 - y0, x1 - x0)
+        sr_tile = crop_sr_to_original(sr_tile, tile_lr_size, scale=scale).detach().float().cpu()
+        mask_tile = crop_sr_to_original(mask_tile, tile_lr_size, scale=scale).detach().float().cpu()
+
+        hy0, hy1 = y0 * scale, y1 * scale
+        hx0, hx1 = x0 * scale, x1 * scale
+        weight = build_tile_blend_weight(
+            output_height=hy1 - hy0,
+            output_width=hx1 - hx0,
+            region=region,
+            full_lr_size=(lr_h, lr_w),
+            tile_overlap=tile_overlap,
+            scale=scale,
+            device=acc_device,
+        )
+        sr_accum[..., hy0:hy1, hx0:hx1] += sr_tile * weight
+        mask_accum[..., hy0:hy1, hx0:hx1] += mask_tile * weight
+        weight_accum[..., hy0:hy1, hx0:hx1] += weight
+
+        if debug_accum is not None and debug_tile is not None and debug_tile.get("a_tex") is not None:
+            heatmap = taca_heatmap_to_image(debug_tile["a_tex"], (hy1 - hy0, hx1 - hx0)).detach().float().cpu()
+            debug_accum[..., hy0:hy1, hx0:hx1] += heatmap * weight
+
+        print(f"[Infer] tile {idx}/{len(regions)}: y={y0}:{y1}, x={x0}:{x1}")
+
+    denom = weight_accum.clamp_min(1e-6)
+    sr = sr_accum / denom
+    mask = mask_accum / denom
+    debug = None
+    if debug_accum is not None:
+        debug = {
+            "heatmap": debug_accum / denom,
+            "output_size": (out_h, out_w),
+        }
+    return sr, mask, debug
+
+
 def taca_heatmap_to_image(a_tex: torch.Tensor, output_size: tuple[int, int]) -> torch.Tensor:
     heatmap = a_tex.detach().float().abs().mean(dim=1, keepdim=True)
     flat = heatmap.flatten(start_dim=1)
@@ -255,24 +434,35 @@ def run_image_inference(
     *,
     device: torch.device,
     save_debug: bool = False,
+    tile_size: int = 0,
+    tile_overlap: int = 32,
 ) -> tuple[torch.Tensor, torch.Tensor, dict | None]:
     lr = image_to_tensor(image_path)
     lr, original_size = pad_lr_tensor_to_even(lr, multiple=LR_PAD_MULTIPLE)
-    lr = lr.to(device)
+    tile_size, tile_overlap = validate_tile_args(tile_size, tile_overlap)
 
-    with torch.inference_mode():
-        output = model(lr, return_debug=save_debug)
-
-    if save_debug:
-        sr, mask, debug = output
+    if tile_size > 0:
+        print(f"[Infer] tiled inference: tile_size={tile_size}, tile_overlap={tile_overlap} LR pixels")
+        sr, mask, debug = run_tiled_model_inference(
+            model,
+            lr,
+            device=device,
+            save_debug=save_debug,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+        )
     else:
-        sr, mask = output
-        debug = None
+        lr = lr.to(device)
+        sr, mask, debug = _forward_model(model, lr, save_debug=save_debug)
 
     scale = int(getattr(model, "SR_SCALE", 4))
     sr = crop_sr_to_original(sr, original_size, scale=scale)
     mask = crop_sr_to_original(mask, original_size, scale=scale)
-    if debug is not None and debug.get("a_tex") is not None:
+    if debug is not None and debug.get("heatmap") is not None:
+        debug = dict(debug)
+        debug["heatmap"] = crop_sr_to_original(debug["heatmap"], original_size, scale=scale)
+        debug["output_size"] = tuple(sr.shape[-2:])
+    elif debug is not None and debug.get("a_tex") is not None:
         debug = dict(debug)
         debug["output_size"] = tuple(sr.shape[-2:])
     return sr, mask, debug
@@ -292,7 +482,9 @@ def save_inference_outputs(
     tensor_to_pil(sr).save(sr_path)
     if save_mask:
         tensor_to_pil(mask).save(mask_path)
-    if save_debug and debug is not None and debug.get("a_tex") is not None:
+    if save_debug and debug is not None and debug.get("heatmap") is not None:
+        tensor_to_pil(debug["heatmap"]).save(debug_path)
+    elif save_debug and debug is not None and debug.get("a_tex") is not None:
         heatmap = taca_heatmap_to_image(debug["a_tex"], debug["output_size"])
         tensor_to_pil(heatmap).save(debug_path)
 
@@ -323,6 +515,8 @@ def run_inference(args: argparse.Namespace) -> None:
             image_path,
             device=device,
             save_debug=args.save_debug,
+            tile_size=args.tile_size,
+            tile_overlap=args.tile_overlap,
         )
         save_inference_outputs(
             sr,
@@ -354,6 +548,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--save-mask", action="store_true", default=True, help="Save predicted text mask")
     parser.add_argument("--no-save-mask", action="store_false", dest="save_mask", help="Do not save predicted text mask")
     parser.add_argument("--save-debug", action="store_true", help="Save TACA attention heatmap")
+    parser.add_argument("--tile-size", type=int, default=0, help="LR patch size for tiled inference; 0 disables tiling")
+    parser.add_argument("--tile-overlap", type=int, default=32, help="LR overlap between neighboring patches")
     return parser.parse_args(argv)
 
 

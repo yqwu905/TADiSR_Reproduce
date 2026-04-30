@@ -791,6 +791,62 @@ def test_inference_pad_crop_helpers():
     print()
 
 
+def test_inference_tiled_helpers():
+    """Test LR patch tiling, overlap blending, and stitched output shapes."""
+    print("=" * 60)
+    print("TEST: Inference Tiled Helpers")
+    print("=" * 60)
+
+    import torch.nn.functional as F
+    from infer import iter_tile_regions, run_tiled_model_inference, validate_tile_args
+
+    assert validate_tile_args(32, 8) == (32, 8)
+    for tile_size, tile_overlap in [(-1, 0), (8, 0), (31, 0), (32, -1), (32, 32)]:
+        try:
+            validate_tile_args(tile_size, tile_overlap)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Expected invalid tile args: {tile_size}, {tile_overlap}")
+
+    regions = iter_tile_regions(64, 80, tile_size=32, tile_overlap=8)
+    assert regions[0] == (0, 32, 0, 32), f"Unexpected first region: {regions[0]}"
+    assert regions[-1] == (32, 64, 48, 80), f"Unexpected last region: {regions[-1]}"
+    assert len(regions) == 9, f"Unexpected tile count: {len(regions)}"
+
+    class DummyTileModel:
+        SR_SCALE = 4
+
+        def __call__(self, lr, return_debug=False):
+            sr = F.interpolate(lr, scale_factor=self.SR_SCALE, mode="nearest")
+            mask = sr.mean(dim=1, keepdim=True)
+            if return_debug:
+                return sr, mask, {"a_tex": lr[:, :1]}
+            return sr, mask
+
+    lr = torch.rand(1, 3, 48, 64)
+    sr, mask, debug = run_tiled_model_inference(
+        DummyTileModel(),
+        lr,
+        device=torch.device("cpu"),
+        save_debug=True,
+        tile_size=32,
+        tile_overlap=8,
+    )
+    expected_sr = F.interpolate(lr, scale_factor=4, mode="nearest")
+    expected_mask = expected_sr.mean(dim=1, keepdim=True)
+    assert sr.shape[-2:] == (192, 256), f"Unexpected SR shape: {sr.shape}"
+    assert mask.shape[-2:] == (192, 256), f"Unexpected mask shape: {mask.shape}"
+    assert torch.allclose(sr, expected_sr, atol=1e-6), "Tiled SR should blend back to deterministic output"
+    assert torch.allclose(mask, expected_mask, atol=1e-6), "Tiled mask should blend back to deterministic output"
+    assert debug is not None and debug["heatmap"].shape[-2:] == (192, 256)
+
+    print("  ✓ Tile argument validation catches invalid patch settings")
+    print("  ✓ Tile regions cover right/bottom borders")
+    print("  ✓ Overlap blending stitches SR, mask, and debug heatmap")
+    print()
+
+
 def test_inference_rejects_non_kolors_config():
     """Test infer.py rejects non-Kolors configs before model construction."""
     print("=" * 60)
@@ -1263,6 +1319,7 @@ def run_all_tests():
         ("Legacy Checkpoint Resume Compatibility", test_legacy_checkpoint_resume_compatibility),
         ("Inference Checkpoint Load", test_inference_checkpoint_load),
         ("Inference Pad/Crop Helpers", test_inference_pad_crop_helpers),
+        ("Inference Tiled Helpers", test_inference_tiled_helpers),
         ("Inference Rejects Non-Kolors Config", test_inference_rejects_non_kolors_config),
         ("Degradation Pipeline", test_degradation_pipeline),
         ("Dataset & Collate", test_dataset),

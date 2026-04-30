@@ -522,12 +522,29 @@ python infer.py \
   --save-debug
 ```
 
+大图切 patch 推理（`--tile-size` 和 `--tile-overlap` 均为 LR 像素）：
+
+```bash
+python infer.py \
+  --config configs/train/kolors.yaml \
+  --checkpoint checkpoints/tadisr_step5000.pt \
+  --input path/to/large_lr.png \
+  --output outputs/infer \
+  --device npu \
+  --precision bf16 \
+  --precomputed-text-context embedding.pt \
+  --tile-size 512 \
+  --tile-overlap 64 \
+  --save-mask
+```
+
 输出文件：
 - SR 图像：`<stem>_sr.png`
 - 文本 mask：`<stem>_mask.png`
 - TACA heatmap（仅 `--save-debug`）：`<stem>_taca.png`
 
 如果 LR 图片宽高不是模型兼容的偶数尺寸，脚本会先复制边界 padding（默认 pad 到 16 的倍数），推理后再裁回原始尺寸的 4× 输出，保证最终 SR/mask 尺寸为 `H*4 × W*4`。
+启用 `--tile-size` 后，脚本会先在 LR 空间切块推理，再把重叠区域按线性权重融合；`--tile-size` 需要是 16 的倍数，`--tile-overlap` 需要小于 `--tile-size`。不传 `--tile-size` 时仍使用整图推理。
 
 ### 6.4 多 GPU 分布式训练
 
