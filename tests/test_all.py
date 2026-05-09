@@ -1166,6 +1166,71 @@ def test_lora_conv2d_flattened_param_views():
     print()
 
 
+def test_jsd_loads_and_uses_vae_post_quant_conv():
+    """JSD image branch should include the VAE post_quant_conv before decoding."""
+    print("=" * 60)
+    print("TEST: JSD VAE post_quant_conv")
+    print("=" * 60)
+
+    import torch.nn as nn
+    from models.vae_jsd import DecoderBranch, JointSegmentationDecoders
+
+    block_channels = (8, 16, 16, 16)
+    norm_groups = 4
+
+    class FakeVAE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.post_quant_conv = nn.Conv2d(4, 4, 1)
+            self.decoder = DecoderBranch(
+                in_channels=4,
+                out_channels=3,
+                block_out_channels=block_channels,
+                layers_per_block=1,
+                norm_num_groups=norm_groups,
+            )
+
+    fake_vae = FakeVAE()
+    with torch.no_grad():
+        fake_vae.post_quant_conv.weight.fill_(0.25)
+        fake_vae.post_quant_conv.bias.copy_(torch.tensor([0.1, 0.2, 0.3, 0.4]))
+
+    jsd = JointSegmentationDecoders(
+        block_out_channels=block_channels,
+        layers_per_block=1,
+        latent_channels=4,
+        lora_rank=2,
+        norm_num_groups=norm_groups,
+    )
+    jsd.init_from_vae(fake_vae)
+
+    assert torch.allclose(jsd.post_quant_conv.weight, fake_vae.post_quant_conv.weight), \
+        "post_quant_conv weights should be copied from the VAE"
+    assert torch.allclose(jsd.post_quant_conv.bias, fake_vae.post_quant_conv.bias), \
+        "post_quant_conv bias should be copied from the VAE"
+    assert not any(p.requires_grad for p in jsd.post_quant_conv.parameters()), \
+        "post_quant_conv must remain frozen"
+
+    called = {"value": False}
+
+    def _mark_called(_module, _inputs, _output):
+        called["value"] = True
+
+    handle = jsd.post_quant_conv.register_forward_hook(_mark_called)
+    jsd.eval()
+    with torch.no_grad():
+        x_hr, s_mask = jsd(torch.randn(1, 4, 2, 2), torch.randn(1, 4, 2, 2))
+    handle.remove()
+
+    assert called["value"], "post_quant_conv should run in JSD forward"
+    assert x_hr.shape == (1, 3, 16, 16), f"Unexpected x_hr shape: {x_hr.shape}"
+    assert s_mask.shape == (1, 1, 16, 16), f"Unexpected s_mask shape: {s_mask.shape}"
+
+    print("  ✓ post_quant_conv is copied from VAE and frozen")
+    print("  ✓ post_quant_conv runs before the image decoder")
+    print()
+
+
 def test_diffusers_taca_integration():
     """Verify TACA installs correctly on a real diffusers UNet."""
     print("=" * 60)
@@ -1241,12 +1306,22 @@ def test_vae_normalization_helpers():
 
     x_out = torch.tensor([-2.0, 0.0, 2.0], dtype=torch.float32).view(1, 1, 1, 3)
     x_denorm = TADiSRWrapper._denormalize_vae_output(x_out)
-    expected_denorm = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float32).view(1, 1, 1, 3)
-    assert torch.allclose(x_denorm, expected_denorm), "Output helper should clamp to [0,1]"
+    expected_denorm = torch.tensor([-0.5, 0.5, 1.5], dtype=torch.float32).view(1, 1, 1, 3)
+    assert torch.allclose(x_denorm, expected_denorm), "Default output helper should not clamp training values"
+
+    x_denorm_clamped = TADiSRWrapper._denormalize_vae_output(x_out, clamp=True)
+    expected_clamped = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float32).view(1, 1, 1, 3)
+    assert torch.allclose(x_denorm_clamped, expected_clamped), "Clamp mode should clip to [0,1]"
+
+    x_grad = torch.tensor([-2.0, 2.0], dtype=torch.float32, requires_grad=True)
+    TADiSRWrapper._denormalize_vae_output(x_grad).sum().backward()
+    assert torch.allclose(x_grad.grad, torch.full_like(x_grad, 0.5)), \
+        "No-clamp denormalization should preserve gradients outside [0,1]"
 
     print(f"  ✓ [0,1] → [-1,1] normalization matches diffusers VAE preprocessing")
     print(f"  ✓ [-1,1] → [0,1] denormalization is invertible on-range")
-    print(f"  ✓ Out-of-range decoder outputs are clamped back to [0,1]")
+    print(f"  ✓ Training denormalization keeps out-of-range values and gradients")
+    print(f"  ✓ Explicit clamp mode clips display/save values to [0,1]")
     print()
 
 
@@ -1308,6 +1383,7 @@ def run_all_tests():
         ("LoRA Failure Is Fatal", test_lora_failure_is_fatal),
         ("jsd_dim Controls JSD Width", test_jsd_dim_controls_channels),
         ("LoRAConv2d Flattened Param Views", test_lora_conv2d_flattened_param_views),
+        ("JSD VAE post_quant_conv", test_jsd_loads_and_uses_vae_post_quant_conv),
         ("Diffusers TACA Integration", test_diffusers_taca_integration),
         ("VAE Normalization Helpers", test_vae_normalization_helpers),
         ("Real VAE Encode Dtype Cast", test_real_vae_encode_casts_to_vae_dtype),

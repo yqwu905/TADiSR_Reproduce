@@ -571,9 +571,12 @@ class TADiSRWrapper(nn.Module):
         return x.clamp(0.0, 1.0).mul(2.0).sub(1.0)
 
     @staticmethod
-    def _denormalize_vae_output(x: torch.Tensor) -> torch.Tensor:
-        """Match diffusers image postprocess: [-1, 1] → [0, 1]."""
-        return x.div(2.0).add(0.5).clamp(0.0, 1.0)
+    def _denormalize_vae_output(x: torch.Tensor, *, clamp: bool = False) -> torch.Tensor:
+        """Map VAE decoder output from [-1, 1] to [0, 1]."""
+        x = x.div(2.0).add(0.5)
+        if clamp:
+            x = x.clamp(0.0, 1.0)
+        return x
 
     def _try_init_kolors(self, pretrained_path, lora_rank):
         """Initialize with real Kolors backbone + LoRA."""

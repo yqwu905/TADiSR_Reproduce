@@ -431,6 +431,11 @@ class JointSegmentationDecoders(nn.Module):
         self.latent_scaling_factor = float(latent_scaling_factor)
         self.gradient_checkpointing = bool(gradient_checkpointing)
 
+        self.post_quant_conv = nn.Conv2d(latent_channels, latent_channels, 1)
+        nn.init.dirac_(self.post_quant_conv.weight)
+        nn.init.zeros_(self.post_quant_conv.bias)
+        self.post_quant_conv.requires_grad_(False)
+
         # Image decoder: output 3 channels (RGB image)
         self.img_decoder = DecoderBranch(
             in_channels=latent_channels,
@@ -478,6 +483,14 @@ class JointSegmentationDecoders(nn.Module):
         Matches state dict keys by name since our DecoderBranch uses
         identical attribute naming as diffusers' Decoder.
         """
+        post_quant_conv = getattr(vae, "post_quant_conv", None)
+        if post_quant_conv is not None:
+            self.post_quant_conv.load_state_dict(post_quant_conv.state_dict())
+            self.post_quant_conv.requires_grad_(False)
+            print("[JSD] Loaded post_quant_conv from VAE")
+        else:
+            print("[JSD] VAE has no post_quant_conv; using identity latent projection")
+
         vae_sd = vae.decoder.state_dict()
         img_sd = self.img_decoder.state_dict()
 
@@ -583,6 +596,7 @@ class JointSegmentationDecoders(nn.Module):
         img_latent = z_H
         if self.latent_scaling_factor != 1.0:
             img_latent = z_H / self.latent_scaling_factor
+        img_latent = self.post_quant_conv(img_latent)
 
         # --- conv_in ---
         h_img = self.img_decoder.conv_in(img_latent)
