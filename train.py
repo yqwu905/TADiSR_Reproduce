@@ -4,7 +4,7 @@ TADiSR training script.
 Paper reference (Section 4.1):
   - Kolors variant of LDM
   - Fixed diffusion timestep t = 200
-  - AdamW optimizer, lr = 5e-5
+  - AdamW optimizer, base lr = 5e-5
   - 4× H20 GPUs, batch_size = 1/GPU, 200k iterations
   - 4× super-resolution
   - Training data: FTSR (45k) + Real-CE (337 pairs)
@@ -13,6 +13,7 @@ Paper reference (Section 4.1):
 import os
 import yaml
 import argparse
+import math
 import random
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -54,8 +55,10 @@ CHECKPOINT_CONFIG_KEYS = (
     "precision",
     "batch_size",
     "lr",
+    "lr_scheduler",
     "grad_clip",
     "warmup_iters",
+    "min_lr_ratio",
     "max_iters",
     "epochs",
     "save_every",
@@ -123,6 +126,8 @@ def load_config(config_path):
     cfg.setdefault("tensorboard_image_max_samples", 1)
     cfg.setdefault("tensorboard_image_size", 256)
     cfg.setdefault("resume_from", None)
+    cfg.setdefault("lr_scheduler", "constant")
+    cfg.setdefault("min_lr_ratio", 0.1)
 
     return SimpleNamespace(**cfg)
 
@@ -689,6 +694,78 @@ def save_training_checkpoint(
     return len(checkpoint["model_state_dict"])
 
 
+def _normalize_lr_scheduler_name(name):
+    scheduler_name = str(name or "constant").strip().lower().replace("_", "-")
+    aliases = {
+        "none": "none",
+        "off": "none",
+        "disabled": "none",
+        "disable": "none",
+        "constant": "constant",
+        "fixed": "constant",
+        "warmup": "constant",
+        "cosine": "cosine",
+        "warmup-cosine": "cosine",
+    }
+    if scheduler_name not in aliases:
+        valid = ", ".join(sorted({"none", "constant", "cosine"}))
+        raise ValueError(f"Unsupported lr_scheduler: {name!r}. Use one of: {valid}.")
+    return aliases[scheduler_name]
+
+
+def _lr_multiplier_for_step(step, *, scheduler_name, warmup_iters, max_iters, min_lr_ratio):
+    step = max(0, int(step))
+    warmup_iters = int(warmup_iters or 0)
+    max_iters = int(max_iters or 0)
+    min_lr_ratio = float(min_lr_ratio)
+
+    if warmup_iters < 0:
+        raise ValueError("warmup_iters must be >= 0.")
+    if not 0.0 <= min_lr_ratio <= 1.0:
+        raise ValueError("min_lr_ratio must be in [0, 1].")
+
+    if warmup_iters > 0 and step < warmup_iters:
+        return float(step + 1) / float(warmup_iters)
+
+    if scheduler_name == "constant":
+        return 1.0
+
+    if scheduler_name == "cosine":
+        if max_iters <= 0:
+            raise ValueError("max_iters must be > 0 for cosine lr scheduling.")
+        decay_iters = max(1, max_iters - warmup_iters)
+        decay_step = min(max(step - warmup_iters, 0), decay_iters)
+        progress = float(decay_step) / float(decay_iters)
+        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine_decay
+
+    raise ValueError(f"Unsupported normalized lr scheduler: {scheduler_name!r}.")
+
+
+def build_lr_scheduler(optimizer, args):
+    """Build the configured LR scheduler, or None for a strictly fixed LR."""
+    scheduler_name = _normalize_lr_scheduler_name(getattr(args, "lr_scheduler", "constant"))
+    warmup_iters = int(getattr(args, "warmup_iters", 0) or 0)
+    max_iters = int(getattr(args, "max_iters", 0) or 0)
+    min_lr_ratio = float(getattr(args, "min_lr_ratio", 0.1))
+
+    if scheduler_name == "none":
+        return None
+    if scheduler_name == "constant" and warmup_iters <= 0:
+        return None
+
+    def lr_lambda(step):
+        return _lr_multiplier_for_step(
+            step,
+            scheduler_name=scheduler_name,
+            warmup_iters=warmup_iters,
+            max_iters=max_iters,
+            min_lr_ratio=min_lr_ratio,
+        )
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
 def create_datasets(args):
     """Create training datasets: FTSR + optionally Real-CE."""
     datasets = []
@@ -784,6 +861,11 @@ def train(args):
     if is_main:
         print(f"Starting TADiSR training on {device}...")
         print(f"  LR: {args.lr}, Batch size(per-process): {args.batch_size}")
+        print(
+            f"  LR scheduler: {getattr(args, 'lr_scheduler', 'constant')} "
+            f"(warmup={getattr(args, 'warmup_iters', 0)}, "
+            f"min_lr_ratio={getattr(args, 'min_lr_ratio', 0.1)})"
+        )
         print(f"  Max iterations: {args.max_iters}")
         print(f"  Gradient clip: {args.grad_clip}")
         print(f"  Precision: {precision_name}")
@@ -902,15 +984,8 @@ def train(args):
         enabled=(precision_name == "fp16" and device.type == "cuda"),
     )
 
-    # 4. Learning rate scheduler (optional warmup + cosine)
-    if args.warmup_iters > 0:
-        def lr_lambda(step):
-            if step < args.warmup_iters:
-                return step / max(args.warmup_iters, 1)
-            return 1.0
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    else:
-        scheduler = None
+    # 4. Learning rate scheduler (optional warmup + cosine decay)
+    scheduler = build_lr_scheduler(optimizer, args)
 
     # 5. Loss
     criterion = CompositeTADiSRLoss(

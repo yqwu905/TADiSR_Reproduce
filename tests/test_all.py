@@ -599,8 +599,10 @@ def _make_checkpoint_test_args(ckpt_dir):
         precision="fp32",
         batch_size=1,
         lr=5e-5,
+        lr_scheduler="cosine",
         grad_clip=1.0,
         warmup_iters=2,
+        min_lr_ratio=0.1,
         max_iters=10,
         epochs=3,
         save_every=1,
@@ -623,6 +625,59 @@ def _prime_optimizer_state(optimizer, params):
     optimizer.zero_grad(set_to_none=True)
 
 
+def test_lr_scheduler_warmup_cosine():
+    """Test configurable warmup + cosine LR scheduling."""
+    print("=" * 60)
+    print("TEST: LR Scheduler Warmup + Cosine")
+    print("=" * 60)
+
+    from types import SimpleNamespace
+    from train import build_lr_scheduler, _lr_multiplier_for_step
+
+    args = SimpleNamespace(
+        lr_scheduler="cosine",
+        warmup_iters=2,
+        max_iters=6,
+        min_lr_ratio=0.1,
+    )
+    multipliers = [
+        _lr_multiplier_for_step(
+            step,
+            scheduler_name="cosine",
+            warmup_iters=args.warmup_iters,
+            max_iters=args.max_iters,
+            min_lr_ratio=args.min_lr_ratio,
+        )
+        for step in range(7)
+    ]
+    assert abs(multipliers[0] - 0.5) < 1e-6
+    assert abs(multipliers[1] - 1.0) < 1e-6
+    assert abs(multipliers[2] - 1.0) < 1e-6
+    assert abs(multipliers[-1] - args.min_lr_ratio) < 1e-6
+    assert multipliers[2] >= multipliers[3] >= multipliers[4] >= multipliers[5] >= multipliers[6]
+
+    param = torch.nn.Parameter(torch.zeros(()))
+    optimizer = torch.optim.AdamW([param], lr=1.0)
+    scheduler = build_lr_scheduler(optimizer, args)
+    assert scheduler is not None
+    assert abs(optimizer.param_groups[0]["lr"] - 0.5) < 1e-6
+
+    fixed_args = SimpleNamespace(
+        lr_scheduler="constant",
+        warmup_iters=0,
+        max_iters=6,
+        min_lr_ratio=0.1,
+    )
+    fixed_optimizer = torch.optim.AdamW([torch.nn.Parameter(torch.zeros(()))], lr=1.0)
+    assert build_lr_scheduler(fixed_optimizer, fixed_args) is None
+    assert fixed_optimizer.param_groups[0]["lr"] == 1.0
+
+    print("  ✓ Cosine scheduler warms up from 1/warmup to base LR")
+    print("  ✓ Cosine decay reaches min_lr_ratio at max_iters")
+    print("  ✓ constant + warmup_iters=0 keeps a strictly fixed LR")
+    print()
+
+
 def test_checkpoint_resume_roundtrip():
     """Test checkpoint v2 save/load restores training state."""
     print("=" * 60)
@@ -631,6 +686,7 @@ def test_checkpoint_resume_roundtrip():
 
     from train import (
         CHECKPOINT_VERSION,
+        build_lr_scheduler,
         load_training_checkpoint,
         save_training_checkpoint,
     )
@@ -640,10 +696,7 @@ def test_checkpoint_resume_roundtrip():
         model = _make_checkpoint_test_model()
         trainable_params = model.get_trainable_params()
         optimizer = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.01)
-        scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer,
-            lambda step: step / max(args.warmup_iters, 1) if step < args.warmup_iters else 1.0,
-        )
+        scheduler = build_lr_scheduler(optimizer, args)
         scaler = torch.amp.GradScaler("cuda", enabled=False)
 
         _prime_optimizer_state(optimizer, trainable_params)
@@ -679,10 +732,7 @@ def test_checkpoint_resume_roundtrip():
         resumed_model = _make_checkpoint_test_model()
         resumed_params = resumed_model.get_trainable_params()
         resumed_optimizer = torch.optim.AdamW(resumed_params, lr=args.lr, weight_decay=0.01)
-        resumed_scheduler = torch.optim.lr_scheduler.LambdaLR(
-            resumed_optimizer,
-            lambda step: step / max(args.warmup_iters, 1) if step < args.warmup_iters else 1.0,
-        )
+        resumed_scheduler = build_lr_scheduler(resumed_optimizer, args)
         resumed_scaler = torch.amp.GradScaler("cuda", enabled=False)
 
         resume_state = load_training_checkpoint(
@@ -1475,6 +1525,7 @@ def run_all_tests():
         ("Full Model Forward", test_full_model_forward),
         ("TensorBoard Visual Debug Helpers", test_tensorboard_visual_debug_helpers),
         ("Training Loop", test_training_loop),
+        ("LR Scheduler Warmup + Cosine", test_lr_scheduler_warmup_cosine),
         ("Checkpoint Save (Fix T2)", test_checkpoint_save),
         ("Checkpoint Resume Roundtrip", test_checkpoint_resume_roundtrip),
         ("Legacy Checkpoint Resume Compatibility", test_legacy_checkpoint_resume_compatibility),

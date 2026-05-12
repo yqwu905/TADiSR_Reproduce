@@ -413,7 +413,8 @@ dataset/FTSR/
 | 参数 | 论文值 | 说明 |
 |------|--------|------|
 | 优化器 | AdamW | weight_decay=0.01 |
-| 学习率 | 5e-5 | 固定 LR（论文未提及 scheduler） |
+| 学习率 | 5e-5 | 作为 base LR；默认使用 warmup + cosine decay，严格复现实验可设为固定 LR |
+| LR scheduler | 论文未提及 | 默认 `lr_scheduler: cosine`，`warmup_iters: 2000`，`min_lr_ratio: 0.1` |
 | 批量大小 | 1/GPU | 显存限制 |
 | 总迭代数 | 200,000 | |
 | 扩散时间步 | t=200（固定） | 非遍历所有时间步 |
@@ -446,9 +447,19 @@ device: cuda
 dist_strategy: ddp
 batch_size: 1
 lr: 0.00005
+lr_scheduler: cosine
+warmup_iters: 2000
+min_lr_ratio: 0.1
 max_iters: 200000
 log_every: 100
 save_every: 5000
+```
+
+如果需要严格保持全程固定学习率，可改为：
+
+```yaml
+lr_scheduler: constant
+warmup_iters: 0
 ```
 
 启动训练：
