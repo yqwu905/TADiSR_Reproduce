@@ -4,6 +4,7 @@ use_kolors: true
 context_dim: 4096
 jsd_dim: 128
 lora_rank: 16
+lora_include_self_attention: false  # true also applies UNet LoRA to attn1 self-attention
 device: npu
 batch_size: 1
 dist_strategy: ddp  # ddp | fsdp

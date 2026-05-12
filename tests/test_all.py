@@ -1145,6 +1145,56 @@ def test_lora_failure_is_fatal():
     print()
 
 
+def test_lora_target_collection_can_include_attn1():
+    """LoRA target collection should optionally include attn1 self-attention."""
+    print("=" * 60)
+    print("TEST: LoRA Target Collection Can Include attn1")
+    print("=" * 60)
+
+    from models.tadisr_model import TADiSRWrapper
+    import torch.nn as nn
+
+    class TinyAttention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.to_q = nn.Linear(8, 8)
+            self.to_k = nn.Linear(8, 8)
+            self.to_v = nn.Linear(8, 8)
+            self.to_out = nn.ModuleList([nn.Linear(8, 8)])
+
+    class TinyBlock(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn1 = TinyAttention()
+            self.attn2 = TinyAttention()
+
+    class TinyUNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.down_blocks = nn.ModuleList([TinyBlock()])
+
+    unet = TinyUNet()
+    cross_only = TADiSRWrapper._collect_lora_target_modules(
+        unet,
+        include_self_attention=False,
+    )
+    with_self = TADiSRWrapper._collect_lora_target_modules(
+        unet,
+        include_self_attention=True,
+    )
+
+    assert len(cross_only) == 4, cross_only
+    assert all(".attn2." in f".{name}." for name in cross_only), cross_only
+    assert not any(".attn1." in f".{name}." for name in cross_only), cross_only
+    assert len(with_self) == 8, with_self
+    assert any(".attn1." in f".{name}." for name in with_self), with_self
+    assert any(name.endswith("to_out.0") for name in with_self), with_self
+
+    print("  ✓ Default LoRA targets only attn2 projections")
+    print("  ✓ lora_include_self_attention adds attn1 projections")
+    print()
+
+
 def test_jsd_dim_controls_channels():
     """Verify jsd_dim is wired into JSD channel width."""
     print("=" * 60)
@@ -1415,6 +1465,7 @@ def run_all_tests():
         ("TACA AttnProcessor (Fix M1)", test_taca_attn_processor),
         ("Chunked TACA Attention Equivalence", test_taca_chunked_attention_equivalence_and_grad),
         ("LoRA Failure Is Fatal", test_lora_failure_is_fatal),
+        ("LoRA Target Collection Can Include attn1", test_lora_target_collection_can_include_attn1),
         ("jsd_dim Controls JSD Width", test_jsd_dim_controls_channels),
         ("LoRAConv2d Flattened Param Views", test_lora_conv2d_flattened_param_views),
         ("JSD VAE post_quant_conv", test_jsd_loads_and_uses_vae_post_quant_conv),

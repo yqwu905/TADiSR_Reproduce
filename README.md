@@ -419,7 +419,7 @@ dataset/FTSR/
 | 扩散时间步 | t=200（固定） | 非遍历所有时间步 |
 | 固定提示词 | "A high-quality photo with clear text" | ChatGLM 编码 |
 | 梯度裁剪 | 1.0 | |
-| LoRA rank | 16 | 仅 cross-attention (attn2) |
+| LoRA rank | 16 | 默认仅 cross-attention (attn2)，可用 `lora_include_self_attention: true` 额外启用 attn1 |
 | 超分辨率倍率 | 4× | |
 
 训练参数统一放在 `YAML` 配置文件中（默认：`configs/train/default.yaml`），通过 `--config` 指定。
@@ -574,7 +574,7 @@ dist_strategy: ddp   # 默认
 3. 上采样 LR：x_L ──(bicubic 4×)──→ x_L↑ (与 HR 同分辨率)
 4. VAE 编码（冻结）：x_L↑ → z_L (潜空间)
 5. 加噪：z_L → z_{L,t} (在固定 t=200 处加噪)
-6. UNet 前向（LoRA 微调 cross-attention）：
+6. UNet 前向（LoRA 默认微调 cross-attention，可选 attn1）：
    - 输入：z_{L,t}, t=200, c_y
    - 输出：噪声预测 n̂
    - 副产物：从所有 M 层 cross-attention 提取 "text" token 注意力图 → a_tex_raw
@@ -595,7 +595,7 @@ dist_strategy: ddp   # 默认
 
 | 模块 | 说明 | 初始化 |
 |------|------|--------|
-| UNet Cross-Attention LoRA | `attn2.to_q/to_k/to_v/to_out` 的 LoRA 适配器 | 零初始化 |
+| UNet Attention LoRA | 默认 `attn2.to_q/to_k/to_v/to_out`；设置 `lora_include_self_attention: true` 后额外包含 `attn1.to_q/to_k/to_v/to_out` | 零初始化 |
 | TACA W_a 投影 | 线性投影层 | 随机初始化 |
 | JSD 图像解码器 LoRA | Conv2d 的 LoRA 适配器 | 零初始化 |
 | JSD 分割解码器 | 完整解码器所有参数 | 随机初始化 |

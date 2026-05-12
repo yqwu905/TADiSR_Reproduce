@@ -134,6 +134,7 @@ def build_model_from_config(
         "use_kolors": use_kolors,
         "context_dim": int(cfg.get("context_dim", 4096)),
         "lora_rank": int(cfg.get("lora_rank", 16)),
+        "lora_include_self_attention": bool(cfg.get("lora_include_self_attention", False)),
         "jsd_dim": cfg.get("jsd_dim"),
         "gradient_checkpointing": False,
         "taca_query_chunk_size": int(cfg.get("taca_query_chunk_size", 1024) or 0),

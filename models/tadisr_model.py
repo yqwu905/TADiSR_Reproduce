@@ -484,7 +484,7 @@ class TADiSRWrapper(nn.Module):
       1. VAE encoder: x_L → (bicubic 4× up) → z_L  (frozen Kolors VAE)
       2. Text encoder: prompt → c_y  (frozen ChatGLM)
       3. Add noise to z_L at fixed t=200 → z_{L,t}
-      4. UNet (with LoRA on cross-attention): predicts noise n̂
+      4. UNet (with LoRA on cross-attention; optional self-attention): predicts noise n̂
       5. Extract cross-attention response to "text" token → a_tex
       6. One-step denoising: ẑ_H = α_t · z_{L,t} − β_t · n̂
       7. JSD: (ẑ_H, a_tex) → (x̂_H, ŝ)
@@ -508,6 +508,7 @@ class TADiSRWrapper(nn.Module):
                  taca_checkpoint: bool = True,
                  taca_detach: bool = False,
                  fail_on_lora_error: bool = True,
+                 lora_include_self_attention: bool = False,
                  require_precomputed_text_context: bool = False,
                  torch_dtype: torch.dtype = torch.float32):
         super().__init__()
@@ -528,6 +529,7 @@ class TADiSRWrapper(nn.Module):
         self.taca_checkpoint = bool(taca_checkpoint)
         self.taca_detach = bool(taca_detach)
         self.fail_on_lora_error = bool(fail_on_lora_error)
+        self.lora_include_self_attention = bool(lora_include_self_attention)
         self.require_precomputed_text_context = bool(require_precomputed_text_context)
         self.torch_dtype = torch_dtype
 
@@ -636,7 +638,7 @@ class TADiSRWrapper(nn.Module):
             detach_taca=self.taca_detach,
         )
 
-        # Apply LoRA to UNet cross-attention layers
+        # Apply LoRA to UNet attention layers.
         self._apply_lora(lora_rank)
 
         # Get context_dim from UNet config
@@ -709,47 +711,68 @@ class TADiSRWrapper(nn.Module):
             print(f"[TADiSR] ✗ Failed to load precomputed context: {e}")
             return False
 
+    @staticmethod
+    def _collect_lora_target_modules(unet, include_self_attention=False):
+        """Collect supported UNet attention projection leaf modules for LoRA."""
+        target_attention_names = {"attn2"}
+        if include_self_attention:
+            target_attention_names.add("attn1")
+
+        lora_target_modules = []
+        for name, module in unet.named_modules():
+            parts = set(name.split("."))
+            if not target_attention_names.intersection(parts):
+                continue
+            if (
+                name.endswith("to_q")
+                or name.endswith("to_k")
+                or name.endswith("to_v")
+                or name.endswith("to_out.0")
+            ):
+                lora_target_modules.append(name)
+        return lora_target_modules
+
     def _apply_lora(self, rank):
-        """Apply LoRA to UNet cross-attention layers (attn2 only) via peft.
+        """Apply LoRA to UNet attention layers via peft.
 
         Paper: "LoRA-based fine-tuning strategy... fine-tune the
         cross-attention mechanism between text and image tokens"
 
-        Fix M2: Only target attn2 (cross-attention) modules, NOT
-        attn1 (self-attention). Previous code used target_modules=
+        Default behavior targets attn2 (cross-attention) modules, NOT
+        attn1 (self-attention). Set lora_include_self_attention=True to
+        include attn1 for ablation experiments. Previous code used target_modules=
         ["to_q", "to_k", ...] which matched BOTH attn1 and attn2.
         """
         try:
             from peft import LoraConfig, get_peft_model
 
-            # Collect only attn2 (cross-attention) linear layer names
-            cross_attn_modules = []
-            for name, module in self.unet_backbone.named_modules():
-                if 'attn2' in name and (
-                    name.endswith('to_q')
-                    or name.endswith('to_k')
-                    or name.endswith('to_v')
-                    or name.endswith('to_out.0')
-                ):
-                    cross_attn_modules.append(name)
+            include_self_attention = bool(getattr(self, "lora_include_self_attention", False))
+            target_modules = self._collect_lora_target_modules(
+                self.unet_backbone,
+                include_self_attention=include_self_attention,
+            )
+            attention_label = "attn1+attn2" if include_self_attention else "attn2"
 
-            if not cross_attn_modules:
+            if not target_modules:
                 # Fallback: if direct name matching fails (e.g. diffusers
                 # version difference), use regex-based targeting
-                print("[TADiSR] Direct attn2 name matching found 0 modules, "
+                print(f"[TADiSR] Direct {attention_label} name matching found 0 modules, "
                       "using regex pattern fallback")
                 import re
+                attn_pattern = r"(?:attn1|attn2)" if include_self_attention else r"attn2"
                 lora_config = LoraConfig(
                     r=rank,
                     lora_alpha=rank,
-                    target_modules=re.compile(r".*attn2\..*(?:to_q|to_k|to_v|to_out\.0)"),
+                    target_modules=re.compile(
+                        rf".*{attn_pattern}\..*(?:to_q|to_k|to_v|to_out\.0)"
+                    ),
                     lora_dropout=0.0,
                 )
             else:
                 lora_config = LoraConfig(
                     r=rank,
                     lora_alpha=rank,
-                    target_modules=cross_attn_modules,
+                    target_modules=target_modules,
                     lora_dropout=0.0,
                 )
 
@@ -769,9 +792,10 @@ class TADiSRWrapper(nn.Module):
             trainable = sum(p.numel() for p in self.unet_backbone.parameters()
                             if p.requires_grad)
             total = sum(p.numel() for p in self.unet_backbone.parameters())
-            print(f"[TADiSR] LoRA (cross-attn only): {trainable:,} / {total:,} "
+            mode = "attn1+attn2" if include_self_attention else "cross-attn only"
+            print(f"[TADiSR] LoRA ({mode}): {trainable:,} / {total:,} "
                   f"params trainable ({100*trainable/total:.2f}%)")
-            print(f"[TADiSR] Targeted {len(cross_attn_modules)} attn2 modules")
+            print(f"[TADiSR] Targeted {len(target_modules)} {attention_label} modules")
         except Exception as e:
             if self.fail_on_lora_error:
                 raise RuntimeError(f"LoRA setup failed; aborting to avoid full-UNet training: {e}") from e

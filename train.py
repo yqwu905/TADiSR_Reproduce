@@ -48,6 +48,7 @@ CHECKPOINT_CONFIG_KEYS = (
     "context_dim",
     "jsd_dim",
     "lora_rank",
+    "lora_include_self_attention",
     "device",
     "dist_strategy",
     "precision",
@@ -116,6 +117,7 @@ def load_config(config_path):
     cfg.setdefault("taca_checkpoint", True)
     cfg.setdefault("taca_detach", False)
     cfg.setdefault("fail_on_lora_error", True)
+    cfg.setdefault("lora_include_self_attention", False)
     cfg.setdefault("require_precomputed_text_context", False)
     cfg.setdefault("tensorboard_image_every", 100)
     cfg.setdefault("tensorboard_image_max_samples", 1)
@@ -789,6 +791,7 @@ def train(args):
         print(f"  TACA chunk: {getattr(args, 'taca_query_chunk_size', 0)}")
         print(f"  TACA checkpoint: {bool(getattr(args, 'taca_checkpoint', False))}")
         print(f"  LPIPS resize: {getattr(args, 'lpips_resize', 0)}")
+        print(f"  LoRA include attn1: {bool(getattr(args, 'lora_include_self_attention', False))}")
         if ddp_state["distributed"]:
             print(f"  Distributed enabled ({dist_strategy.upper()}) — world_size: {ddp_state['world_size']}")
 
@@ -838,6 +841,7 @@ def train(args):
         taca_checkpoint=getattr(args, "taca_checkpoint", True),
         taca_detach=getattr(args, "taca_detach", False),
         fail_on_lora_error=getattr(args, "fail_on_lora_error", True),
+        lora_include_self_attention=getattr(args, "lora_include_self_attention", False),
         require_precomputed_text_context=getattr(args, "require_precomputed_text_context", False),
         precomputed_text_context_path=getattr(args, "precomputed_text_context_path", None),
         torch_dtype=precision_dtype,
