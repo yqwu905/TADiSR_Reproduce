@@ -82,6 +82,32 @@ class _NullSummaryWriter:
     def close(self):
         return None
 
+
+def _tensorboard_scalar_value(value):
+    if torch.is_tensor(value):
+        return value.detach().float().item()
+    return float(value)
+
+
+def _log_tensorboard_loss_scalars(
+    tb_writer,
+    global_step,
+    loss,
+    loss_img,
+    loss_seg,
+    loss_components=None,
+):
+    tb_writer.add_scalar("train/loss", _tensorboard_scalar_value(loss), global_step)
+    tb_writer.add_scalar("train/loss_img", _tensorboard_scalar_value(loss_img), global_step)
+    tb_writer.add_scalar("train/loss_seg", _tensorboard_scalar_value(loss_seg), global_step)
+    for name, value in (loss_components or {}).items():
+        tb_writer.add_scalar(
+            f"train/loss_components/{name}",
+            _tensorboard_scalar_value(value),
+            global_step,
+        )
+
+
 torch.jit._state.disable()
 
 def load_config(config_path):
@@ -1046,11 +1072,12 @@ def train(args):
                     debug = None
 
                 # Calculate composite loss
-                loss, loss_img, loss_seg = criterion(
+                loss, loss_img, loss_seg, loss_components = criterion(
                     x_pred.float(),
                     hr_img.float(),
                     s_pred.float(),
                     mask.float(),
+                    return_components=True,
                 )
             loss_for_backward = loss.float()
 
@@ -1100,9 +1127,14 @@ def train(args):
 
             if is_main and global_step % args.log_every == 0:
                 current_lr = optimizer.param_groups[0]['lr']
-                tb_writer.add_scalar("train/loss", loss.item(), global_step)
-                tb_writer.add_scalar("train/loss_img", loss_img.item(), global_step)
-                tb_writer.add_scalar("train/loss_seg", loss_seg.item(), global_step)
+                _log_tensorboard_loss_scalars(
+                    tb_writer,
+                    global_step,
+                    loss,
+                    loss_img,
+                    loss_seg,
+                    loss_components,
+                )
                 tb_writer.add_scalar("train/lr", current_lr, global_step)
                 mem = _cuda_memory_stats(device)
                 if mem is not None:

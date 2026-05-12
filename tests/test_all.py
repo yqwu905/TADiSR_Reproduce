@@ -288,6 +288,38 @@ def test_losses():
     assert loss_img.item() >= 0, "Image loss should be non-negative"
     assert loss_seg.item() >= 0, "Seg loss should be non-negative"
 
+    detailed_total, detailed_img, detailed_seg, components = criterion(
+        x_pred, x_hr, s_pred, s_hr, return_components=True
+    )
+    assert torch.allclose(total, detailed_total), "Detailed loss total should match default"
+    assert torch.allclose(loss_img, detailed_img), "Detailed image loss should match default"
+    assert torch.allclose(loss_seg, detailed_seg), "Detailed seg loss should match default"
+    expected_component_keys = {
+        "image/mse",
+        "image/lpips",
+        "image/mfl",
+        "seg/mse",
+        "seg/focal",
+        "seg/dice",
+        "weighted/image/mse",
+        "weighted/image/lpips",
+        "weighted/image/mfl",
+        "weighted/seg/mse",
+        "weighted/seg/focal",
+        "weighted/seg/dice",
+    }
+    assert expected_component_keys == set(components), components.keys()
+    weighted_component_sum = (
+        components["weighted/image/mse"]
+        + components["weighted/image/lpips"]
+        + components["weighted/image/mfl"]
+        + components["weighted/seg/mse"]
+        + components["weighted/seg/focal"]
+        + components["weighted/seg/dice"]
+    )
+    assert torch.allclose(detailed_total, weighted_component_sum), \
+        "Weighted sub-losses should sum to total loss"
+
     # Verify structure: total = img + seg
     expected_total = loss_img.item() + loss_seg.item()
     diff = abs(total.item() - expected_total)
@@ -323,6 +355,14 @@ def test_losses():
     assert torch.allclose(total_w, torch.tensor(85.0)), \
         f"Expected total loss 85.0, got {total_w.item()}"
 
+    _, _, _, weighted_components = weighted(
+        zeros_img, zeros_img, zeros_mask, zeros_mask, return_components=True
+    )
+    assert torch.allclose(weighted_components["weighted/image/lpips"], torch.tensor(10.0))
+    assert torch.allclose(weighted_components["weighted/image/mfl"], torch.tensor(30.0))
+    assert torch.allclose(weighted_components["weighted/seg/focal"], torch.tensor(40.0))
+    assert torch.allclose(weighted_components["weighted/seg/dice"], torch.tensor(5.0))
+
     # Test with alpha-balanced focal loss
     criterion_alpha = CompositeTADiSRLoss(use_alpha_focal=True)
     total_a, _, _ = criterion_alpha(x_pred, x_hr, s_pred, s_hr)
@@ -331,6 +371,7 @@ def test_losses():
     print(f"  ✓ CompositeLoss (alpha focal):    total={total_a.item():.4f}")
     print(f"  ✓ ℓ_tot = ℓ_img + ℓ_seg verified (paper Section 3.4)")
     print("  ✓ Paper loss weights map to LPIPS/MFL/Focal/Dice")
+    print("  ✓ Raw and weighted sub-loss components are exposed for logging")
     print()
 
 
@@ -431,11 +472,20 @@ def test_tensorboard_visual_debug_helpers():
     print("=" * 60)
 
     from types import SimpleNamespace
-    from train import _NullSummaryWriter, _log_tensorboard_images, _prepare_taca_heatmap
+    from train import (
+        _NullSummaryWriter,
+        _log_tensorboard_images,
+        _log_tensorboard_loss_scalars,
+        _prepare_taca_heatmap,
+    )
 
     class CapturingWriter(_NullSummaryWriter):
         def __init__(self):
             self.image_tags = []
+            self.scalar_tags = {}
+
+        def add_scalar(self, tag, scalar_value, global_step=None, *args, **kwargs):
+            self.scalar_tags[tag] = (float(scalar_value), global_step)
 
         def add_image(self, tag, img_tensor, global_step=None, *args, **kwargs):
             self.image_tags.append(tag)
@@ -492,8 +542,29 @@ def test_tensorboard_visual_debug_helpers():
         "images/overview_grid",
     }
     assert expected_tags.issubset(set(writer.image_tags)), writer.image_tags
+    _log_tensorboard_loss_scalars(
+        writer,
+        2,
+        torch.tensor(6.0),
+        torch.tensor(4.0),
+        torch.tensor(2.0),
+        {
+            "image/mse": torch.tensor(0.25),
+            "weighted/seg/dice": torch.tensor(0.75),
+        },
+    )
+    expected_scalar_tags = {
+        "train/loss",
+        "train/loss_img",
+        "train/loss_seg",
+        "train/loss_components/image/mse",
+        "train/loss_components/weighted/seg/dice",
+    }
+    assert expected_scalar_tags.issubset(set(writer.scalar_tags)), writer.scalar_tags
+    assert writer.scalar_tags["train/loss_components/image/mse"] == (0.25, 2)
 
     null_writer = _NullSummaryWriter()
+    null_writer.add_scalar("noop/scalar", 1.0, 1)
     null_writer.add_image("noop/image", taca_vis[0], 1)
     null_writer.add_images("noop/images", taca_vis, 1)
     null_writer.flush()
@@ -502,7 +573,8 @@ def test_tensorboard_visual_debug_helpers():
     print("  ✓ forward() default return remains 2 values")
     print("  ✓ forward(return_debug=True) exposes finite TACA a_tex")
     print("  ✓ TACA heatmap and TensorBoard image tags are generated")
-    print("  ✓ _NullSummaryWriter supports image APIs")
+    print("  ✓ TensorBoard loss scalar tags include sub-losses")
+    print("  ✓ _NullSummaryWriter supports scalar and image APIs")
     print()
 
 

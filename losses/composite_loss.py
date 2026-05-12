@@ -264,13 +264,14 @@ class CompositeTADiSRLoss(nn.Module):
             # Fallback: simple pixel-space L1 as a stand-in
             return F.l1_loss(x_pred, x_hr)
 
-    def forward(self, x_pred, x_hr, s_pred, s_hr):
+    def forward(self, x_pred, x_hr, s_pred, s_hr, return_components: bool = False):
         """
         Args:
             x_pred: [B, 3, H, W]  predicted SR image
             x_hr:   [B, 3, H, W]  ground truth HR image
             s_pred: [B, 1, H', W'] predicted segmentation mask
             s_hr:   [B, 1, H', W'] ground truth segmentation mask
+            return_components: If True, also return raw and weighted sub-losses.
         """
         # Align spatial sizes
         if x_pred.shape != x_hr.shape:
@@ -296,4 +297,22 @@ class CompositeTADiSRLoss(nn.Module):
                     + self.lambda3 * loss_focal_seg
                     + self.lambda4 * loss_dice)
 
-        return loss_img + loss_seg, loss_img, loss_seg
+        total_loss = loss_img + loss_seg
+        if not return_components:
+            return total_loss, loss_img, loss_seg
+
+        loss_components = {
+            "image/mse": loss_mse_img,
+            "image/lpips": loss_lpips,
+            "image/mfl": loss_mfl,
+            "seg/mse": loss_mse_seg,
+            "seg/focal": loss_focal_seg,
+            "seg/dice": loss_dice,
+            "weighted/image/mse": loss_mse_img,
+            "weighted/image/lpips": self.lambda1 * loss_lpips,
+            "weighted/image/mfl": self.lambda2 * loss_mfl,
+            "weighted/seg/mse": loss_mse_seg,
+            "weighted/seg/focal": self.lambda3 * loss_focal_seg,
+            "weighted/seg/dice": self.lambda4 * loss_dice,
+        }
+        return total_loss, loss_img, loss_seg, loss_components
