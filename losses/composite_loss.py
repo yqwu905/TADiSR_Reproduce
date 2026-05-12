@@ -4,13 +4,13 @@ Composite loss for TADiSR multi-task learning.
 Paper reference (Section 3.4):
   ℓ_tot = ℓ_img + ℓ_seg
 
-  ℓ_img = λ1·MSE(x̂_H, x_H) + λ2·LPIPS(x̂_H, x_H) + ℓ_MFL(x̂_H, x_H, ŝ, s)
+  ℓ_img = MSE(x̂_H, x_H) + λ1·LPIPS(x̂_H, x_H) + λ2·ℓ_MFL(x̂_H, x_H, ŝ, s)
     where λ1=5.0, λ2=10.0
 
-  ℓ_MFL = exp(∇s) ⊙ (1 - (ŝ⊙s + (1-ŝ)⊙(1-s)))^γ ⊙ ||x̂_H - x_H||_1
+  ℓ_MFL = ||(1 - (ŝ⊙s + (1-ŝ)⊙(1-s)))^γ ⊙ (∇x̂_H - ∇x_H)^2||_1
     where ∇ is Sobel edge operator
 
-  ℓ_seg = λ3·MSE(ŝ, s) + λ4·Focal(ŝ, s) + Dice(ŝ, s)
+  ℓ_seg = MSE(ŝ, s) + λ3·Focal(ŝ, s) + λ4·Dice(ŝ, s)
     where λ3=10.0, λ4=1.0
 
 Fixes applied:
@@ -71,10 +71,10 @@ class SobelOperator(nn.Module):
 # ---------------------------------------------------------------------------
 class ModifiedFocalLoss(nn.Module):
     """
-    ℓ_MFL(x̂_H, x_H, ŝ, s) = exp(∇s) ⊙ (1 - p)^γ ⊙ ||x̂_H − x_H||_1
+    ℓ_MFL(x̂_H, x_H, ŝ, s) = ||(1 - p)^γ ⊙ (∇x̂_H − ∇x_H)^2||_1
 
     where p = ŝ⊙s + (1−ŝ)⊙(1−s)   is the probability of correct classification
-    and ∇ is the Sobel edge operator applied to the GT mask s.
+    and ∇ is the Sobel edge operator applied to the image pair.
     """
 
     def __init__(self, gamma: float = 2.0):
@@ -90,26 +90,26 @@ class ModifiedFocalLoss(nn.Module):
             s_pred: [B, 1, H', W']
             s_hr:   [B, 1, H', W']
         """
-        # L1 distance per pixel, averaged over channels → [B, 1, H, W]
-        l1_dist = torch.abs(x_pred - x_hr).mean(dim=1, keepdim=True)
+        if x_pred.shape != x_hr.shape:
+            x_pred = F.interpolate(x_pred, size=x_hr.shape[2:],
+                                   mode="bilinear", align_corners=False)
+
+        # Paper Eq.8 applies the focal weighting to squared image-gradient errors.
+        grad_pred = self.sobel(x_pred)
+        grad_hr = self.sobel(x_hr)
+        grad_diff_sq = (grad_pred - grad_hr).pow(2)
 
         # Probability of correct classification
         p = s_pred * s_hr + (1 - s_pred) * (1 - s_hr)  # [B, 1, H', W']
 
-        # Edge weight: Sobel on GT segmentation mask (Issue 5: guaranteed single channel)
-        edge_weight = self.sobel(s_hr)  # [B, 1, H', W']
-
         # Align spatial resolutions if they differ
-        target_size = l1_dist.shape[2:]
-        if edge_weight.shape[2:] != target_size:
-            edge_weight = F.interpolate(edge_weight, size=target_size,
-                                        mode="bilinear", align_corners=False)
+        target_size = grad_diff_sq.shape[2:]
+        if p.shape[2:] != target_size:
             p = F.interpolate(p, size=target_size,
                               mode="bilinear", align_corners=False)
 
-        # Paper Eq.6
-        focal_weight = torch.exp(edge_weight) * (1 - p) ** self.gamma
-        weighted_loss = l1_dist * focal_weight
+        focal_weight = (1 - p.clamp(0.0, 1.0)).pow(self.gamma)
+        weighted_loss = grad_diff_sq * focal_weight
         return weighted_loss.mean()
 
 
@@ -198,8 +198,8 @@ class CompositeTADiSRLoss(nn.Module):
     """
     Total loss = ℓ_img + ℓ_seg
 
-    ℓ_img = λ1·MSE + λ2·LPIPS + MFL
-    ℓ_seg = λ3·MSE + λ4·Focal + Dice
+    ℓ_img = MSE + λ1·LPIPS + λ2·MFL
+    ℓ_seg = MSE + λ3·Focal + λ4·Dice
     """
 
     def __init__(self, lambda1: float = 5.0, lambda2: float = 10.0,
@@ -215,10 +215,10 @@ class CompositeTADiSRLoss(nn.Module):
         """
         super().__init__()
 
-        self.lambda1 = lambda1
-        self.lambda2 = lambda2
-        self.lambda3 = lambda3
-        self.lambda4 = lambda4
+        self.lambda1 = lambda1  # LPIPS weight
+        self.lambda2 = lambda2  # MFL weight
+        self.lambda3 = lambda3  # segmentation focal weight
+        self.lambda4 = lambda4  # segmentation Dice weight
         self.lpips_resize = int(lpips_resize or 0)
 
         self.mse = nn.MSELoss()
@@ -284,16 +284,16 @@ class CompositeTADiSRLoss(nn.Module):
         loss_mse_img = self.mse(x_pred, x_hr)
         loss_lpips = self._lpips_loss(x_pred, x_hr)
         loss_mfl = self.mfl(x_pred, x_hr, s_pred, s_hr)
-        loss_img = (self.lambda1 * loss_mse_img
-                    + self.lambda2 * loss_lpips
-                    + loss_mfl)
+        loss_img = (loss_mse_img
+                    + self.lambda1 * loss_lpips
+                    + self.lambda2 * loss_mfl)
 
         # ---- Segmentation Loss ----
         loss_mse_seg = self.mse(s_pred, s_hr)
         loss_focal_seg = self.focal_seg(s_pred, s_hr)
         loss_dice = self.dice(s_pred, s_hr)
-        loss_seg = (self.lambda3 * loss_mse_seg
-                    + self.lambda4 * loss_focal_seg
-                    + loss_dice)
+        loss_seg = (loss_mse_seg
+                    + self.lambda3 * loss_focal_seg
+                    + self.lambda4 * loss_dice)
 
         return loss_img + loss_seg, loss_img, loss_seg

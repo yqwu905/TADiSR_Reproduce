@@ -256,6 +256,9 @@ def test_losses():
     loss_mfl = mfl(x_pred, x_hr, s_pred, s_hr)
     assert loss_mfl.ndim == 0, "MFL should return scalar"
     assert loss_mfl.item() >= 0, "MFL should be non-negative"
+    same_img_mfl = mfl(x_hr, x_hr, s_pred, s_hr)
+    assert same_img_mfl.item() < 1e-8, \
+        "MFL should be zero when predicted and target image gradients match"
     print(f"  ✓ ModifiedFocalLoss: {loss_mfl.item():.4f}")
 
     # Test DiceLoss
@@ -290,6 +293,36 @@ def test_losses():
     diff = abs(total.item() - expected_total)
     assert diff < 1e-3, f"ℓ_tot should = ℓ_img + ℓ_seg. diff={diff}"
 
+    # Verify paper weight mapping:
+    # L_img = MSE + lambda1*LPIPS + lambda2*MFL
+    # L_seg = MSE + lambda3*Focal + lambda4*Dice
+    class ConstantLoss(torch.nn.Module):
+        def __init__(self, value):
+            super().__init__()
+            self.value = float(value)
+
+        def forward(self, *args):
+            return args[0].new_tensor(self.value)
+
+    weighted = CompositeTADiSRLoss(
+        lambda1=5.0, lambda2=10.0, lambda3=10.0, lambda4=1.0
+    )
+    weighted._lpips_loss = lambda x, y: x.new_tensor(2.0)
+    weighted.mfl = ConstantLoss(3.0)
+    weighted.focal_seg = ConstantLoss(4.0)
+    weighted.dice = ConstantLoss(5.0)
+    zeros_img = torch.zeros(1, 3, 8, 8)
+    zeros_mask = torch.zeros(1, 1, 8, 8)
+    total_w, loss_img_w, loss_seg_w = weighted(
+        zeros_img, zeros_img, zeros_mask, zeros_mask
+    )
+    assert torch.allclose(loss_img_w, torch.tensor(40.0)), \
+        f"Expected image loss 40.0, got {loss_img_w.item()}"
+    assert torch.allclose(loss_seg_w, torch.tensor(45.0)), \
+        f"Expected seg loss 45.0, got {loss_seg_w.item()}"
+    assert torch.allclose(total_w, torch.tensor(85.0)), \
+        f"Expected total loss 85.0, got {total_w.item()}"
+
     # Test with alpha-balanced focal loss
     criterion_alpha = CompositeTADiSRLoss(use_alpha_focal=True)
     total_a, _, _ = criterion_alpha(x_pred, x_hr, s_pred, s_hr)
@@ -297,6 +330,7 @@ def test_losses():
     print(f"  ✓ CompositeLoss (standard focal): total={total.item():.4f}")
     print(f"  ✓ CompositeLoss (alpha focal):    total={total_a.item():.4f}")
     print(f"  ✓ ℓ_tot = ℓ_img + ℓ_seg verified (paper Section 3.4)")
+    print("  ✓ Paper loss weights map to LPIPS/MFL/Focal/Dice")
     print()
 
 
